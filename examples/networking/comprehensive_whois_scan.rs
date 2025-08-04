@@ -49,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("===========================================");
     println!("  BACnet Comprehensive Network Scan");
     println!("===========================================\n");
+    
 
     // Bind to standard BACnet port
     let socket = match UdpSocket::bind("0.0.0.0:47808") {
@@ -412,13 +413,11 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
     if object_count > 1 { // More than just the device object
         println!("      Reading object details using ReadPropertyMultiple...");
         let objects_to_read = device.objects.len(); // Read all objects
+        
+        
         for i in 0..objects_to_read {
-            // Use only ReadPropertyMultiple
+            // Use ReadPropertyMultiple to get object properties
             if let Ok(all_props) = read_all_object_properties(socket, device, &device.objects[i]) {
-                // Debug for specific object - commented out
-                // if device.objects[i].object_type == ObjectType::AnalogInput && device.objects[i].instance == 18 {
-                //     println!("        AI 18 properties: {:?}", all_props);
-                // }
                 
                 // Extract object name
                 if let Some(name) = all_props.get(&(PropertyIdentifier::ObjectName as u32)) {
@@ -429,12 +428,12 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
                             .collect::<String>()
                             .trim()
                             .to_string();
-                            
+
                         // Validate the name - if it looks like binary garbage, skip it
                         let printable_ratio = cleaned_name.chars()
                             .filter(|c| c.is_ascii_graphic() || c == &' ')
                             .count() as f32 / cleaned_name.len().max(1) as f32;
-                            
+
                         if printable_ratio > 0.7 && cleaned_name.len() > 0 {
                             device.objects[i].name = Some(cleaned_name);
                         } else if cleaned_name.len() > 0 && cleaned_name.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
@@ -442,68 +441,14 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
                             device.objects[i].name = Some(cleaned_name);
                         }
                     }
-                } else {
-                    // Try to read the object name directly using ReadProperty
-                    if let Ok(name_response) = read_object_property(socket, device, &device.objects[i], PropertyIdentifier::ObjectName as u32) {
-                        if let Ok(parsed_name) = parse_string_from_response(&name_response) {
-                            // Clean up object names - remove null bytes and control characters
-                            let cleaned_name = parsed_name.chars()
-                                .filter(|&c| c != '\0' && !c.is_control())
-                                .collect::<String>()
-                                .trim()
-                                .to_string();
-                                
-                            if !cleaned_name.is_empty() {
-                                device.objects[i].name = Some(cleaned_name);
-                            }
-                        }
-                    }
-                }
-                
-                // Extract present value
-                if let Some(value) = all_props.get(&(PropertyIdentifier::PresentValue as u32)) {
-                    device.objects[i].present_value = Some(value.clone());
-                } else {
-                    // Try to read the present value directly using ReadProperty for I/O objects
-                    if matches!(device.objects[i].object_type,
-                        ObjectType::AnalogInput | ObjectType::AnalogOutput | ObjectType::AnalogValue |
-                        ObjectType::BinaryInput | ObjectType::BinaryOutput | ObjectType::BinaryValue |
-                        ObjectType::MultiStateInput | ObjectType::MultiStateOutput | ObjectType::MultiStateValue) {
-                        if let Ok(value_response) = read_object_property(socket, device, &device.objects[i], PropertyIdentifier::PresentValue as u32) {
-                            device.objects[i].present_value = Some(value_response);
-                        }
-                    }
                 }
             }
             
-            // Fallback added for reading present values directly
             std::thread::sleep(Duration::from_millis(50)); // Small delay between reads
         }
     }
     
-    // Old fallback code - commented out as we're using the new approach
-    // else {
-    //     // Try alternative methods to read at least some objects
-    //     println!("      Attempting to read individual objects...");
-    //
-    //     // Try to read just the first few objects as a sample
-    //     let objects_to_read = std::cmp::min(device.objects.len(), 10);
-    //     for i in 0..objects_to_read {
-    //         // Read object name
-    //         if let Ok(name) = read_object_property(socket, device, &device.objects[i], PropertyIdentifier::ObjectName as u32) {
-    //             device.objects[i].name = Some(name);
-    //         }
-    //
-    //         // Read present value for I/O objects
-    //         if is_io_object(device.objects[i].object_type) {
-    //             if let Ok(value) = read_object_property(socket, device, &device.objects[i], PropertyIdentifier::PresentValue as u32) {
-    //                 device.objects[i].present_value = Some(value);
-    //             }
-    //         }
-    //
-    //         std::thread::sleep(Duration::from_millis(50));
-    //     }
-    // }
+    
     
     Ok(())
 }
@@ -807,12 +752,7 @@ fn read_all_object_properties(socket: &UdpSocket, device: &BACnetDevice, object:
     let invoke_id = INVOKE_ID.fetch_add(1, Ordering::SeqCst);
     let invoke_id = if invoke_id == 0 { 1 } else { invoke_id };
     
-    // Debug output - commented out
-    // if object.object_type == ObjectType::AnalogInput && (object.instance == 61 || object.instance == 18) {
-    //     println!("        Reading properties for {} {}", object_type_name(object.object_type), object.instance);
-    // }
-    
-    // Create ReadPropertyMultiple request for ALL properties
+    // Create ReadPropertyMultiple request for ONLY ObjectName
     let mut apdu = Vec::new();
     apdu.push(0x02); // Confirmed-Request (with segmentation bit)
     apdu.push(0x75); // Segmentation accepted, max APDU 1476
@@ -824,21 +764,12 @@ fn read_all_object_properties(socket: &UdpSocket, device: &BACnetDevice, object:
     apdu.push(0x0C); // Context tag 0, length 4
     apdu.extend_from_slice(&obj_id.to_be_bytes());
     
-    // Property list - request specific properties
+    // Property list - request ONLY ObjectName
     apdu.push(0x1E); // Opening tag 1
     
-    // Property 1: ObjectName (77)
+    // Property: ObjectName (77)
     apdu.push(0x09); // Context tag 0, length 1
     apdu.push(77);   // Property ID 77 = Object_Name
-    
-    // Property 2: PresentValue (85) - only for I/O objects
-    if matches!(object.object_type,
-        ObjectType::AnalogInput | ObjectType::AnalogOutput | ObjectType::AnalogValue |
-        ObjectType::BinaryInput | ObjectType::BinaryOutput | ObjectType::BinaryValue |
-        ObjectType::MultiStateInput | ObjectType::MultiStateOutput | ObjectType::MultiStateValue) {
-        apdu.push(0x09); // Context tag 0, length 1
-        apdu.push(85);   // Property ID 85 = Present_Value
-    }
     
     apdu.push(0x1F); // Closing tag 1
     
@@ -978,11 +909,7 @@ fn send_request_and_get_response(socket: &UdpSocket, device: &BACnetDevice, apdu
                                         
                                         // For ReadPropertyMultiple responses (service choice 0x0E)
                                         if service_choice == 0x0E {
-                                            // Debug for Device 5047
-                                            if device.device_id == 5047 && apdu_data.len() >= 140 && apdu_data.len() <= 150 {
-                                                println!("        Device 5047 RPM response {} bytes, first 30: {:02X?}",
-                                                         apdu_data.len(), &apdu_data[0..30]);
-                                            }
+                                            
                                             // Return as hex for parsing
                                             return Ok(format!("0x{}", hex::encode(apdu_data)));
                                         }
@@ -1172,13 +1099,9 @@ fn display_comprehensive_summary(devices: &HashMap<u32, BACnetDevice>) {
                     None => "<unnamed>"
                 };
                 let type_name = object_type_name(obj.object_type);
-                
-                // Show present value for I/O objects
-                if let Some(value) = &obj.present_value {
-                    println!("      {:2}. {} {} - {} = {}", i + 1, type_name, obj.instance, obj_name, value);
-                } else {
-                    println!("      {:2}. {} {} - {}", i + 1, type_name, obj.instance, obj_name);
-                }
+
+                // Only show object name
+                println!("      {:2}. {} {} - {}", i + 1, type_name, obj.instance, obj_name);
             }
         } else {
             println!("   OBJECTS: Unable to read object list");
@@ -1423,6 +1346,7 @@ fn decode_hex(hex_str: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     hex::decode(hex_str).map_err(|e| e.to_string().into())
 }
 
+
 fn parse_string_from_response(response: &str) -> Result<String, Box<dyn std::error::Error>> {
     // Handle hex response starting with 0x
     if response.starts_with("0x") {
@@ -1482,6 +1406,221 @@ fn decode_bacnet_value(data: &[u8]) -> Result<String, Box<dyn std::error::Error>
     
     // Fallback - hex encode
     Ok(format!("0x{}", hex::encode(data)))
+}
+
+// Extract ASCII characters from UTF-16 encoded data
+fn extract_ascii_from_utf16(data: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    if data.len() % 2 != 0 {
+        return Err("Invalid UTF-16 data length".into());
+    }
+    
+    let mut result = String::new();
+    let mut i = 0;
+    
+    // Check if data looks like UTF-16LE (null bytes in odd positions)
+    let mut looks_like_le = true;
+    let mut looks_like_be = true;
+    
+    // Analyze the pattern
+    for j in (0..data.len().min(20)).step_by(2) {
+        if j + 1 < data.len() {
+            if data[j + 1] != 0 {
+                looks_like_le = false;
+            }
+            if data[j] != 0 {
+                looks_like_be = false;
+            }
+        }
+    }
+    
+    if looks_like_le {
+        // UTF-16LE: ASCII chars are in even positions, odd positions are 0
+        while i + 1 < data.len() {
+            let ch = data[i];
+            if ch == 0 {
+                break; // End of string
+            }
+            if ch >= 32 && ch <= 126 {
+                result.push(ch as char);
+            } else {
+                return Err("Non-ASCII character found".into());
+            }
+            i += 2;
+        }
+    } else if looks_like_be {
+        // UTF-16BE: ASCII chars are in odd positions, even positions are 0
+        while i + 1 < data.len() {
+            let ch = data[i + 1];
+            if ch == 0 {
+                break; // End of string
+            }
+            if ch >= 32 && ch <= 126 {
+                result.push(ch as char);
+            } else {
+                return Err("Non-ASCII character found".into());
+            }
+            i += 2;
+        }
+    } else {
+        return Err("Data doesn't look like ASCII UTF-16".into());
+    }
+    
+    Ok(result)
+}
+
+// Check if a string contains only printable ASCII characters
+fn is_printable_ascii(s: &str) -> bool {
+    s.chars().all(|c| c.is_ascii() && (c.is_ascii_graphic() || c.is_ascii_whitespace()))
+}
+
+// Decode UCS-2 or UTF-16 string data using encoding_rs
+fn decode_ucs2_or_utf16(data: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    use encoding_rs::{UTF_16LE, UTF_16BE, UTF_8};
+    
+    if data.is_empty() {
+        return Ok("".to_string());
+    }
+    
+    // Check if we have an even number of bytes (required for UTF-16)
+    if data.len() % 2 != 0 {
+        // If odd number of bytes, try to interpret as UTF-8 as a fallback
+        let (result, _, had_errors) = UTF_8.decode(data);
+        if !had_errors {
+            let cleaned = result.trim_end_matches('\0').trim().to_string();
+            if !cleaned.is_empty() {
+                return Ok(cleaned);
+            }
+        }
+        // If UTF-8 fails, try treating as single-byte ASCII-like encoding
+        let ascii_result: String = data.iter()
+            .filter(|&&b| b >= 32 && b <= 126) // Only printable ASCII
+            .map(|&b| b as char)
+            .collect();
+        if !ascii_result.is_empty() {
+            return Ok(ascii_result);
+        }
+        return Ok(format!("(invalid encoding: 0x{})", hex::encode(data)));
+    }
+    
+    // First try to extract ASCII from UTF-16 manually (more reliable for BACnet)
+    if let Ok(ascii_result) = extract_ascii_from_utf16(data) {
+        if !ascii_result.is_empty() {
+            return Ok(ascii_result);
+        }
+    }
+    
+    // Try UTF-16LE (little-endian) using encoding_rs
+    let (result, _, had_errors) = UTF_16LE.decode(data);
+    if !had_errors {
+        let cleaned = result.trim_end_matches('\0').trim().to_string();
+        if !cleaned.is_empty() && is_printable_ascii(&cleaned) {
+            return Ok(cleaned);
+        }
+    }
+    
+    // Try UTF-16BE (big-endian) as a fallback
+    let (result, _, had_errors) = UTF_16BE.decode(data);
+    if !had_errors {
+        let cleaned = result.trim_end_matches('\0').trim().to_string();
+        if !cleaned.is_empty() && is_printable_ascii(&cleaned) {
+            return Ok(cleaned);
+        }
+    }
+    
+    // Direct ASCII extraction for common BACnet strings
+    // This is a workaround for display issues with UTF-16 strings
+    let mut ascii_string = String::new();
+    let mut i = 0;
+    
+    // Check if this looks like UTF-16LE (ASCII chars with zero bytes in between)
+    let mut is_utf16le = true;
+    let mut is_utf16be = true;
+    
+    // Check the pattern to determine if it's likely UTF-16LE or UTF-16BE
+    for j in (0..data.len()).step_by(2) {
+        if j + 1 < data.len() {
+            // For UTF-16LE, we expect every other byte to be zero for ASCII text
+            if data[j+1] != 0 {
+                is_utf16le = false;
+            }
+            // For UTF-16BE, we expect every first byte to be zero for ASCII text
+            if data[j] != 0 {
+                is_utf16be = false;
+            }
+        }
+    }
+    
+    // If it looks like UTF-16LE, extract ASCII characters only
+    if is_utf16le {
+        while i < data.len() {
+            if i + 1 < data.len() && data[i+1] == 0 {
+                let ch = data[i];
+                if ch >= 32 && ch <= 126 {
+                    ascii_string.push(ch as char);
+                } else if ch != 0 {
+                    // Non-ASCII character, stop processing
+                    break;
+                }
+            }
+            i += 2;
+        }
+    } 
+    // If it looks like UTF-16BE, extract ASCII characters only
+    else if is_utf16be {
+        while i < data.len() {
+            if i + 1 < data.len() && data[i] == 0 {
+                let ch = data[i+1];
+                if ch >= 32 && ch <= 126 {
+                    ascii_string.push(ch as char);
+                } else if ch != 0 {
+                    // Non-ASCII character, stop processing
+                    break;
+                }
+            }
+            i += 2;
+        }
+    }
+    // Fallback to scanning for ASCII patterns
+    else {
+        while i < data.len() {
+            if i + 1 < data.len() {
+                if data[i] >= 32 && data[i] <= 126 && data[i+1] == 0 {
+                    // This is an ASCII character in UTF-16LE
+                    ascii_string.push(data[i] as char);
+                } else if data[i] == 0 && data[i+1] >= 32 && data[i+1] <= 126 {
+                    // This is an ASCII character in UTF-16BE
+                    ascii_string.push(data[i+1] as char);
+                }
+            }
+            i += 2;
+        }
+    }
+    
+    if !ascii_string.is_empty() {
+        return Ok(ascii_string);
+    }
+    
+    // If all decoding methods failed, return an error
+    Err(format!("Failed to decode UTF-16 string").into())
+}
+
+// Convert hex bytes to a more readable string representation
+fn hex_to_readable_string(data: &[u8]) -> String {
+    let mut result = String::new();
+    let mut i = 0;
+    while i < data.len() {
+        if i > 0 {
+            result.push(' ');
+        }
+        if i + 1 < data.len() {
+            result.push_str(&format!("{:02X}{:02X}", data[i], data[i+1]));
+            i += 2;
+        } else {
+            result.push_str(&format!("{:02X}", data[i]));
+            i += 1;
+        }
+    }
+    result
 }
 
 // Parse BACnet application tags according to the protocol specification
@@ -1616,15 +1755,49 @@ fn parse_bacnet_application_tag(data: &[u8]) -> Result<String, Box<dyn std::erro
                 match charset {
                     0 => { // UTF-8
                         match std::str::from_utf8(string_data) {
-                            Ok(s) => Ok(s.to_string()),
-                            Err(_) => Ok(format!("(invalid UTF-8: 0x{})", hex::encode(string_data)))
+                            Ok(s) => Ok(s.trim_end_matches('\0').trim().to_string()),
+                            Err(_) => {
+                                // Some devices incorrectly report UTF-8 for UTF-16 data
+                                match decode_ucs2_or_utf16(string_data) {
+                                    Ok(s) if !s.is_empty() => Ok(s),
+                                    _ => Ok(format!("(invalid UTF-8: 0x{})", hex::encode(string_data)))
+                                }
+                            }
                         }
                     },
+                    4 => { // UCS-2
+                        // UCS-2 is a subset of UTF-16, so we can use the same decoder
+                        decode_ucs2_or_utf16(string_data)
+                    },
+                    5 => { // UTF-16
+                        decode_ucs2_or_utf16(string_data)
+                    },
                     _ => {
-                        // For other character sets, try UTF-8 anyway as a fallback
-                        match std::str::from_utf8(string_data) {
-                            Ok(s) => Ok(s.to_string()),
-                            Err(_) => Ok(format!("(charset {}: 0x{})", charset, hex::encode(string_data)))
+                        // For unknown character sets, try multiple approaches
+                        // First try UTF-8
+                        if let Ok(s) = std::str::from_utf8(string_data) {
+                            let cleaned = s.trim_end_matches('\0').trim().to_string();
+                            if !cleaned.is_empty() {
+                                return Ok(cleaned);
+                            }
+                        }
+                        
+                        // Then try UTF-16 as many devices incorrectly report charset
+                        if let Ok(s) = decode_ucs2_or_utf16(string_data) {
+                            if !s.is_empty() {
+                                return Ok(s);
+                            }
+                        }
+                        
+                        // Last resort: try to extract ASCII characters
+                        let ascii_result: String = string_data.iter()
+                            .filter(|&&b| b >= 32 && b <= 126) // Only printable ASCII
+                            .map(|&b| b as char)
+                            .collect();
+                        if !ascii_result.is_empty() {
+                            Ok(ascii_result)
+                        } else {
+                            Ok(format!("(charset {}: 0x{})", charset, hex::encode(string_data)))
                         }
                     }
                 }
@@ -1756,12 +1929,6 @@ fn parse_all_properties_response(data: &str) -> Result<HashMap<u32, String>, Box
                                 
                                 // Now parse the value
                                 if i < bytes.len() {
-                                    // Debug for property 77 (Object_Name) - commented out
-                                    // if prop_id == 77 && i + 10 < bytes.len() {
-                                    //     println!("        Found Object_Name at position {}, next 10 bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-                                    //         i, bytes[i], bytes[i+1], bytes[i+2], bytes[i+3], bytes[i+4],
-                                    //         bytes[i+5], bytes[i+6], bytes[i+7], bytes[i+8], bytes[i+9]);
-                                    // }
                                     
                                     // Try to determine the length of the value
                                     let value_result = parse_bacnet_application_tag(&bytes[i..]);
@@ -1902,22 +2069,63 @@ fn parse_bacnet_string_at(data: &[u8], start: usize) -> Result<String, Box<dyn s
         return Err("Not a character string tag".into());
     }
     
-    let length = (tag & 0x07) as usize;
-    if start + 1 + length + 1 > data.len() {
+    let length_value_type = tag & 0x07;
+    let (data_len, data_start) = if length_value_type <= 4 {
+        // Length is in the tag
+        (length_value_type as usize, start + 1)
+    } else if length_value_type == 5 {
+        // Length in next octet
+        if start + 1 >= data.len() {
+            return Err("Incomplete length encoding".into());
+        }
+        let len = data[start + 1] as usize;
+        (len, start + 2)
+    } else {
+        return Err("Unsupported length encoding".into());
+    };
+    
+    if data_start + data_len > data.len() {
         return Err("Insufficient data for string".into());
     }
     
-    let charset = data[start + 1];
-    let string_data = &data[start + 2..start + 1 + length + 1];
+    if data_len == 0 {
+        return Ok("".to_string());
+    }
+    
+    let charset = data[data_start];
+    let string_data = &data[data_start + 1..data_start + data_len];
     
     match charset {
         0 => { // UTF-8
             match std::str::from_utf8(string_data) {
-                Ok(s) => Ok(s.to_string()),
-                Err(_) => Ok(format!("(invalid UTF-8: 0x{})", hex::encode(string_data)))
+                Ok(s) => Ok(s.trim_end_matches('\0').trim().to_string()),
+                Err(_) => {
+                    // Try to decode as UTF-16 if UTF-8 fails
+                    match decode_ucs2_or_utf16(string_data) {
+                        Ok(s) if !s.is_empty() => Ok(s),
+                        _ => Ok(format!("(invalid UTF-8: 0x{})", hex::encode(string_data)))
+                    }
+                }
             }
         },
-        _ => Ok(format!("(charset {}: 0x{})", charset, hex::encode(string_data)))
+        4 => { // UCS-2
+            decode_ucs2_or_utf16(string_data)
+        },
+        5 => { // UTF-16
+            decode_ucs2_or_utf16(string_data)
+        },
+        _ => {
+            // For unknown character sets, try UTF-8 first, then UTF-16
+            match std::str::from_utf8(string_data) {
+                Ok(s) => Ok(s.trim_end_matches('\0').trim().to_string()),
+                Err(_) => {
+                    match decode_ucs2_or_utf16(string_data) {
+                        Ok(s) if !s.is_empty() => Ok(s),
+                        _ => Ok(format!("(charset {}: 0x{})", charset, hex::encode(string_data)))
+                    }
+                }
+            }
+        }
     }
 }
 
