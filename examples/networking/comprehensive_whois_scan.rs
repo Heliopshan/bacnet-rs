@@ -417,8 +417,9 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
         
         for i in 0..objects_to_read {
             // Use ReadPropertyMultiple to get object properties
+            let mut got_name = false;
+            
             if let Ok(all_props) = read_all_object_properties(socket, device, &device.objects[i]) {
-                
                 // Extract object name
                 if let Some(name) = all_props.get(&(PropertyIdentifier::ObjectName as u32)) {
                     if let Ok(parsed_name) = parse_string_from_response(name) {
@@ -429,15 +430,26 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
                             .trim()
                             .to_string();
 
-                        // Validate the name - if it looks like binary garbage, skip it
-                        let printable_ratio = cleaned_name.chars()
-                            .filter(|c| c.is_ascii_graphic() || c == &' ')
-                            .count() as f32 / cleaned_name.len().max(1) as f32;
-
-                        if printable_ratio > 0.7 && cleaned_name.len() > 0 {
+                        // Less strict validation - just ensure it's not empty and has some printable characters
+                        if !cleaned_name.is_empty() {
                             device.objects[i].name = Some(cleaned_name);
-                        } else if cleaned_name.len() > 0 && cleaned_name.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
-                            // Accept names that are all printable ASCII even if they don't meet the ratio test
+                            got_name = true;
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: If we didn't get a name from ReadPropertyMultiple, try individual ReadProperty
+            if !got_name {
+                if let Ok(name_response) = read_object_property(socket, device, &device.objects[i], PropertyIdentifier::ObjectName as u32) {
+                    if let Ok(parsed_name) = parse_string_from_response(&name_response) {
+                        let cleaned_name = parsed_name.chars()
+                            .filter(|&c| c != '\0' && !c.is_control())
+                            .collect::<String>()
+                            .trim()
+                            .to_string();
+                            
+                        if !cleaned_name.is_empty() {
                             device.objects[i].name = Some(cleaned_name);
                         }
                     }
