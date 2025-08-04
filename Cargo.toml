@@ -37,6 +37,9 @@ crc = "3.2"
 # Hex encoding/decoding
 hex = "0.4"
 
+# UTF encoding/decoding
+encoding_rs = "0.8"
+
 # Optional async runtime
 async-trait = { version = "0.1", optional = true }
 
