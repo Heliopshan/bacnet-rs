@@ -1399,18 +1399,40 @@ fn display_comprehensive_summary(devices: &HashMap<u32, BACnetDevice>) {
 
                 let type_name = object_type_name(obj.object_type);
 
-                // Show object name, present value, and units if available
-                if let Some(value) = &obj.present_value {
-                    if let Some(units) = &obj.units {
-                        println!("      {:2}. {} {} - {} = {} {}", i + 1, type_name, obj.instance, obj_name, value, units);
+                // Check if present_value is the same as object name to avoid duplication
+                let value_str = obj.present_value.as_deref().unwrap_or("N/A");
+                let units_str = obj.units.as_deref().unwrap_or("");
+                
+                // For Device 1, check if value is the same as name or a substring to avoid duplication
+                if device.device_id == 1 && (value_str == obj_name || 
+                   (value_str != "N/A" && (obj_name.contains(value_str) || value_str.contains(obj_name)))) {
+                    // Only show name and units if present
+                    if !units_str.is_empty() {
+                        println!("      {:2}. {} {} - {} ({})", 
+                            i + 1, 
+                            type_name, 
+                            obj.instance, 
+                            obj_name, 
+                            units_str
+                        );
                     } else {
-                        println!("      {:2}. {} {} - {} = {}", i + 1, type_name, obj.instance, obj_name, value);
+                        println!("      {:2}. {} {} - {}", 
+                            i + 1, 
+                            type_name, 
+                            obj.instance, 
+                            obj_name
+                        );
                     }
-                } else if let Some(units) = &obj.units {
-                    // Display units even when there's no present value
-                    println!("      {:2}. {} {} - {} ({})", i + 1, type_name, obj.instance, obj_name, units);
                 } else {
-                    println!("      {:2}. {} {} - {}", i + 1, type_name, obj.instance, obj_name);
+                    // Normal case - show name, value, and units
+                    println!("      {:2}. {} {} - {} = {} {}", 
+                        i + 1, 
+                        type_name, 
+                        obj.instance, 
+                        obj_name, 
+                        value_str, 
+                        units_str
+                    );
                 }
             }
         } else {
@@ -2584,89 +2606,193 @@ fn parse_units_from_response(response: &str) -> Result<String, Box<dyn std::erro
     // Function to convert unit ID to human-readable name
     fn unit_id_to_name(unit_id: &str) -> String {
         match unit_id {
-            // Temperature units
-            "95" => "degrees-celsius".to_string(),
-            "96" => "degrees-fahrenheit".to_string(),
-            "97" => "degrees-kelvin".to_string(),
-            
-            // Percentage units
-            "98" => "percent".to_string(),
-            "99" => "percent-relative-humidity".to_string(),
-            
-            // Pressure units
-            "133" => "pascals".to_string(),
-            "134" => "kilopascals".to_string(),
-            "135" => "bars".to_string(),
-            "136" => "pounds-per-square-inch".to_string(),
-            "137" => "centimeters-of-water".to_string(),
-            "138" => "inches-of-water".to_string(),
-            "139" => "millimeters-of-mercury".to_string(),
-            "140" => "centimeters-of-mercury".to_string(),
-            "141" => "inches-of-mercury".to_string(),
-            
-            // Flow units
-            "83" => "liters-per-second".to_string(),
-            "84" => "liters-per-minute".to_string(),
-            "85" => "liters-per-hour".to_string(),
-            "142" => "cubic-feet-per-minute".to_string(),
-            
-            // Energy units
-            "157" => "watts".to_string(),
-            "158" => "kilowatts".to_string(),
-            "159" => "megawatts".to_string(),
-            "160" => "btus-per-hour".to_string(),
-            "161" => "horsepower".to_string(),
-            "166" => "kilowatt-hours".to_string(),
-            "167" => "megawatt-hours".to_string(),
-            
-            // Time units
-            "58" => "seconds".to_string(),
-            "59" => "minutes".to_string(),
-            "60" => "hours".to_string(),
-            "61" => "days".to_string(),
-            
-            // Length units
-            "62" => "millimeters".to_string(),
-            "63" => "centimeters".to_string(),
-            "64" => "meters".to_string(),
-            "65" => "inches".to_string(),
-            "66" => "feet".to_string(),
-            
             // Area units
             "0" => "square-meters".to_string(),
-            "116" => "square-feet".to_string(),
-            
-            // Volume units
-            "18" => "liters".to_string(),
-            "19" => "cubic-meters".to_string(),
-            "29" => "gallons".to_string(),
-            
-            // Velocity units
-            "104" => "meters-per-second-per-second".to_string(),
-            "105" => "meters-per-second".to_string(),
-            "106" => "meters-per-minute".to_string(),
-            "107" => "meters-per-hour".to_string(),
-            "122" => "revolutions-per-minute".to_string(),
-            "127" => "kilometers-per-hour".to_string(),
-            
-            // Volume flow units
-            "80" => "cubic-meters-per-second".to_string(),
-            "82" => "cubic-meters-per-hour".to_string(),
+            "116" => "square-centimeters".to_string(),
+            "1" => "square-feet".to_string(),
+            "115" => "square-inches".to_string(),
             
             // Currency units
-            "191" => "currency1".to_string(),
-            "192" => "currency2".to_string(),
-            "193" => "currency3".to_string(),
-            "194" => "currency4".to_string(),
-            "195" => "currency5".to_string(),
-            "196" => "currency6".to_string(),
-            "197" => "currency7".to_string(),
-            "198" => "currency8".to_string(),
-            "199" => "currency9".to_string(),
-            "200" => "currency10".to_string(),
+            "105" => "currency1".to_string(),
+            "106" => "currency2".to_string(),
+            "107" => "currency3".to_string(),
+            "108" => "currency4".to_string(),
+            "109" => "currency5".to_string(),
+            "110" => "currency6".to_string(),
+            "111" => "currency7".to_string(),
+            "112" => "currency8".to_string(),
+            "113" => "currency9".to_string(),
+            "114" => "currency10".to_string(),
+            
+            // Electrical units
+            "2" => "milliamperes".to_string(),
+            "3" => "amperes".to_string(),
+            "4" => "ohms".to_string(),
+            "122" => "kilohms".to_string(),
+            "123" => "megohms".to_string(),
+            "5" => "volts".to_string(),
+            "124" => "millivolts".to_string(),
+            "6" => "kilovolts".to_string(),
+            "7" => "megavolts".to_string(),
+            "8" => "volt-amperes".to_string(),
+            "9" => "kilovolt-amperes".to_string(),
+            "10" => "megavolt-amperes".to_string(),
+            "11" => "volt-amperes-reactive".to_string(),
+            "12" => "kilovolt-amperes-reactive".to_string(),
+            "13" => "megavolt-amperes-reactive".to_string(),
+            "14" => "degrees-phase".to_string(),
+            "15" => "power-factor".to_string(),
+            
+            // Energy units
+            "16" => "joules".to_string(),
+            "17" => "kilojoules".to_string(),
+            "125" => "kilojoules-per-kilogram".to_string(),
+            "126" => "megajoules".to_string(),
+            "18" => "watt-hours".to_string(),
+            "19" => "kilowatt-hours".to_string(),
+            "20" => "btus".to_string(),
+            "21" => "therms".to_string(),
+            "22" => "ton-hours".to_string(),
+            
+            // Enthalpy units
+            "23" => "joules-per-kilogram-dry-air".to_string(),
+            "24" => "btus-per-pound-dry-air".to_string(),
+            "117" => "btus-per-pound".to_string(),
+            
+            // Entropy units
+            "127" => "joules-per-degree-Kelvin".to_string(),
+            "128" => "joules-per-kilogram-degree-Kelvin".to_string(),
+            
+            // Temperature units
+            "62" => "degrees-Celsius".to_string(),
+            "63" => "degrees-Kelvin".to_string(),
+            "64" => "degrees-Fahrenheit".to_string(),
+            "65" => "degrees-days-Celsius".to_string(),
+            "66" => "degrees-days-Fahrenheit".to_string(),
+            "120" => "delta-degrees-Fahrenheit".to_string(),
+            "121" => "delta-degrees-Kelvin".to_string(),
+            
+            // Frequency units
+            "25" => "cycles-per-hour".to_string(),
+            "26" => "cycles-per-minute".to_string(),
+            "27" => "hertz".to_string(),
+            "129" => "kilohertz".to_string(),
+            "130" => "megahertz".to_string(),
+            "131" => "per-hour".to_string(),
+            
+            // Humidity units
+            "28" => "grams-of-water-per-kilogram-dry-air".to_string(),
+            "29" => "percent-relative-humidity".to_string(),
+            
+            // Length units
+            "30" => "millimeters".to_string(),
+            "118" => "centimeters".to_string(),
+            "31" => "meters".to_string(),
+            "32" => "inches".to_string(),
+            "33" => "feet".to_string(),
+            
+            // Light units
+            "34" => "watts-per-square-foot".to_string(),
+            "35" => "watts-per-square-meter".to_string(),
+            "36" => "lumens".to_string(),
+            "37" => "luxes".to_string(),
+            "38" => "foot-candles".to_string(),
+            
+            // Mass units
+            "39" => "kilograms".to_string(),
+            "40" => "pounds-mass".to_string(),
+            "41" => "tons".to_string(),
+            
+            // Mass Flow units
+            "42" => "kilograms-per-second".to_string(),
+            "43" => "kilograms-per-minute".to_string(),
+            "44" => "kilograms-per-hour".to_string(),
+            "119" => "pounds-mass-per-second".to_string(),
+            "45" => "pounds-mass-per-minute".to_string(),
+            "46" => "pounds-mass-per-hour".to_string(),
+            
+            // Power units
+            "132" => "milliwatts".to_string(),
+            "47" => "watts".to_string(),
+            "48" => "kilowatts".to_string(),
+            "49" => "megawatts".to_string(),
+            "50" => "btus-per-hour".to_string(),
+            "51" => "horsepower".to_string(),
+            "52" => "tons-refrigeration".to_string(),
+            
+            // Pressure units
+            "53" => "pascals".to_string(),
+            "133" => "hectopascals".to_string(),
+            "54" => "kilopascals".to_string(),
+            "134" => "millibars".to_string(),
+            "55" => "bars".to_string(),
+            "56" => "pounds-force-per-square-inch".to_string(),
+            "57" => "centimeters-of-water".to_string(),
+            "58" => "inches-of-water".to_string(),
+            "59" => "millimeters-of-mercury".to_string(),
+            "60" => "centimeters-of-mercury".to_string(),
+            "61" => "inches-of-mercury".to_string(),
+            
+            // Time units
+            "67" => "years".to_string(),
+            "68" => "months".to_string(),
+            "69" => "weeks".to_string(),
+            "70" => "days".to_string(),
+            "71" => "hours".to_string(),
+            "72" => "minutes".to_string(),
+            "73" => "seconds".to_string(),
+            
+            // Velocity units
+            "74" => "meters-per-second".to_string(),
+            "75" => "kilometers-per-hour".to_string(),
+            "76" => "feet-per-second".to_string(),
+            "77" => "feet-per-minute".to_string(),
+            "78" => "miles-per-hour".to_string(),
+            
+            // Volume units
+            "79" => "cubic-feet".to_string(),
+            "80" => "cubic-meters".to_string(),
+            "81" => "imperial-gallons".to_string(),
+            "82" => "liters".to_string(),
+            "83" => "us-gallons".to_string(),
+            
+            // Volumetric Flow units
+            "142" => "cubic-feet-per-second".to_string(),
+            "84" => "cubic-feet-per-minute".to_string(),
+            "85" => "cubic-meters-per-second".to_string(),
+            "135" => "cubic-meters-per-hour".to_string(),
+            "86" => "imperial-gallons-per-minute".to_string(),
+            "87" => "liters-per-second".to_string(),
+            "88" => "liters-per-minute".to_string(),
+            "136" => "liters-per-hour".to_string(),
+            "89" => "us-gallons-per-minute".to_string(),
+            
+            // Other units
+            "90" => "degrees-angular".to_string(),
+            "91" => "degrees-Celsius-per-hour".to_string(),
+            "92" => "degrees-Celsius-per-minute".to_string(),
+            "93" => "degrees-Fahrenheit-per-hour".to_string(),
+            "94" => "degrees-Fahrenheit-per-minute".to_string(),
+            "137" => "kilowatt-hours-per-square-meter".to_string(),
+            "138" => "kilowatt-hours-per-square-foot".to_string(),
+            "139" => "megajoules-per-square-meter".to_string(),
+            "140" => "megajoules-per-square-foot".to_string(),
+            "95" => "no-units".to_string(),
+            "96" => "parts-per-million".to_string(),
+            "97" => "parts-per-billion".to_string(),
+            "98" => "percent".to_string(),
+            "143" => "percent-obscuration-per-foot".to_string(),
+            "144" => "percent-obscuration-per-meter".to_string(),
+            "99" => "percent-per-second".to_string(),
+            "100" => "per-minute".to_string(),
+            "101" => "per-second".to_string(),
+            "102" => "psi-per-degree-Fahrenheit".to_string(),
+            "103" => "radians".to_string(),
+            "104" => "revolutions-per-minute".to_string(),
+            "141" => "watts-per-square-meter-degree-Kelvin".to_string(),
             
             // Default case - return a more user-friendly string
-            _ => format!("Unit({})", unit_id),
+            _ => "unknown-units".to_string(),
         }
     }
 
