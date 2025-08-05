@@ -2581,70 +2581,109 @@ fn object_type_name(obj_type: ObjectType) -> &'static str {
 }
 
 fn parse_units_from_response(response: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // Function to convert unit ID to human-readable name
+    fn unit_id_to_name(unit_id: &str) -> String {
+        match unit_id {
+            // Temperature units
+            "95" => "degrees-celsius".to_string(),
+            "96" => "degrees-fahrenheit".to_string(),
+            "97" => "degrees-kelvin".to_string(),
+            
+            // Percentage units
+            "98" => "percent".to_string(),
+            "99" => "percent-relative-humidity".to_string(),
+            
+            // Pressure units
+            "133" => "pascals".to_string(),
+            "134" => "kilopascals".to_string(),
+            "135" => "bars".to_string(),
+            "136" => "pounds-per-square-inch".to_string(),
+            "137" => "centimeters-of-water".to_string(),
+            "138" => "inches-of-water".to_string(),
+            "139" => "millimeters-of-mercury".to_string(),
+            "140" => "centimeters-of-mercury".to_string(),
+            "141" => "inches-of-mercury".to_string(),
+            
+            // Flow units
+            "83" => "liters-per-second".to_string(),
+            "84" => "liters-per-minute".to_string(),
+            "85" => "liters-per-hour".to_string(),
+            "142" => "cubic-feet-per-minute".to_string(),
+            
+            // Energy units
+            "157" => "watts".to_string(),
+            "158" => "kilowatts".to_string(),
+            "159" => "megawatts".to_string(),
+            "160" => "btus-per-hour".to_string(),
+            "161" => "horsepower".to_string(),
+            "166" => "kilowatt-hours".to_string(),
+            "167" => "megawatt-hours".to_string(),
+            
+            // Time units
+            "58" => "seconds".to_string(),
+            "59" => "minutes".to_string(),
+            "60" => "hours".to_string(),
+            "61" => "days".to_string(),
+            
+            // Length units
+            "62" => "millimeters".to_string(),
+            "63" => "centimeters".to_string(),
+            "64" => "meters".to_string(),
+            "65" => "inches".to_string(),
+            "66" => "feet".to_string(),
+            
+            // Area units
+            "0" => "square-meters".to_string(),
+            "116" => "square-feet".to_string(),
+            
+            // Volume units
+            "18" => "liters".to_string(),
+            "19" => "cubic-meters".to_string(),
+            "29" => "gallons".to_string(),
+            
+            // Velocity units
+            "104" => "meters-per-second-per-second".to_string(),
+            "105" => "meters-per-second".to_string(),
+            "106" => "meters-per-minute".to_string(),
+            "107" => "meters-per-hour".to_string(),
+            "122" => "revolutions-per-minute".to_string(),
+            "127" => "kilometers-per-hour".to_string(),
+            
+            // Volume flow units
+            "80" => "cubic-meters-per-second".to_string(),
+            "82" => "cubic-meters-per-hour".to_string(),
+            
+            // Currency units
+            "191" => "currency1".to_string(),
+            "192" => "currency2".to_string(),
+            "193" => "currency3".to_string(),
+            "194" => "currency4".to_string(),
+            "195" => "currency5".to_string(),
+            "196" => "currency6".to_string(),
+            "197" => "currency7".to_string(),
+            "198" => "currency8".to_string(),
+            "199" => "currency9".to_string(),
+            "200" => "currency10".to_string(),
+            
+            // Default case - return a more user-friendly string
+            _ => format!("Unit({})", unit_id),
+        }
+    }
+
     // Handle hex response starting with 0x
     if response.starts_with("0x") {
         let hex_str = &response[2..];
         if let Ok(bytes) = decode_hex(hex_str) {
             // Use universal decoder - units will be returned as enumerated values
             if let Ok(value) = decode_bacnet_value(&bytes) {
-                // Convert common unit enumerations to readable names
-                match value.as_str() {
-                    // Temperature units
-                    "95" => return Ok("degrees-celsius".to_string()),
-                    "96" => return Ok("degrees-fahrenheit".to_string()),
-                    "97" => return Ok("degrees-kelvin".to_string()),
-                    
-                    // Percentage units
-                    "98" => return Ok("percent".to_string()),
-                    "99" => return Ok("percent-relative-humidity".to_string()),
-                    
-                    // Pressure units
-                    "133" => return Ok("pascals".to_string()),
-                    "134" => return Ok("kilopascals".to_string()),
-                    "135" => return Ok("bars".to_string()),
-                    "136" => return Ok("pounds-per-square-inch".to_string()),
-                    "137" => return Ok("centimeters-of-water".to_string()),
-                    "138" => return Ok("inches-of-water".to_string()),
-                    "139" => return Ok("millimeters-of-mercury".to_string()),
-                    "140" => return Ok("centimeters-of-mercury".to_string()),
-                    "141" => return Ok("inches-of-mercury".to_string()),
-                    
-                    // Flow units
-                    "83" => return Ok("liters-per-second".to_string()),
-                    "84" => return Ok("liters-per-minute".to_string()),
-                    "85" => return Ok("liters-per-hour".to_string()),
-                    "142" => return Ok("cubic-feet-per-minute".to_string()),
-                    
-                    // Energy units
-                    "157" => return Ok("watts".to_string()),
-                    "158" => return Ok("kilowatts".to_string()),
-                    "159" => return Ok("megawatts".to_string()),
-                    "160" => return Ok("btus-per-hour".to_string()),
-                    "161" => return Ok("horsepower".to_string()),
-                    "166" => return Ok("kilowatt-hours".to_string()),
-                    "167" => return Ok("megawatt-hours".to_string()),
-                    
-                    // Time units
-                    "58" => return Ok("seconds".to_string()),
-                    "59" => return Ok("minutes".to_string()),
-                    "60" => return Ok("hours".to_string()),
-                    "61" => return Ok("days".to_string()),
-                    
-                    // Other common units
-                    "19" => return Ok("cubic-meters".to_string()),
-                    "80" => return Ok("cubic-meters-per-second".to_string()),
-                    "82" => return Ok("cubic-meters-per-hour".to_string()),
-                    "105" => return Ok("meters-per-second".to_string()),
-                    "106" => return Ok("meters-per-minute".to_string()),
-                    "107" => return Ok("meters-per-hour".to_string()),
-                    "122" => return Ok("revolutions-per-minute".to_string()),
-                    
-                    // Default case - return the raw value
-                    _ => return Ok(value),
-                }
+                return Ok(unit_id_to_name(&value));
             }
         }
+    } else if response.chars().all(|c| c.is_digit(10)) {
+        // Handle plain numeric values
+        return Ok(unit_id_to_name(response));
     }
+    
     Ok(response.to_string())
 }
 
