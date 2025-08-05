@@ -414,158 +414,62 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
     if object_count > 1 { // More than just the device object
         println!("      Reading object details using ReadPropertyMultiple...");
         let objects_to_read = device.objects.len(); // Read all objects
+        let use_rpm_all = true; // Option to use ReadPropertyMultiple with ALL
 
 
         for i in 0..objects_to_read {
-            // Request units first for each object
-            if is_io_object(device.objects[i].object_type) {
-                if let Ok(units_response) = read_object_property(socket, device, &device.objects[i], 117) { // 117 = Units property ID
-                    if let Ok(parsed_units) = parse_units_from_response(&units_response) {
-                        device.objects[i].units = Some(parsed_units);
-                    }
-                }
-            }
+            let mut used_rpm = false;
             
-            // Use ReadPropertyMultiple to get object properties
-            let mut got_name = false;
-
-            if let Ok(all_props) = read_all_object_properties(socket, device, &device.objects[i]) {
-                // Extract object name
-                if let Some(name) = all_props.get(&(PropertyIdentifier::ObjectName as u32)) {
-                    if let Ok(parsed_name) = parse_string_from_response(name) {
-                        // Clean up object names - remove null bytes and control characters
-                        let cleaned_name = parsed_name.chars()
-                            .filter(|&c| c != '\0' && !c.is_control())
-                            .collect::<String>()
-                            .trim()
-                            .to_string();
-
-                        // Less strict validation - just ensure it's not empty and has some printable characters
-                        if !cleaned_name.is_empty() {
-                            device.objects[i].name = Some(cleaned_name);
-                            got_name = true;
+            // Try ReadPropertyMultiple with ALL first
+            if use_rpm_all {
+                if let Ok(all_props) = read_all_properties_rpm(socket, device, &device.objects[i]) {
+                    // Check if we got properties
+                    if !all_props.is_empty() {
+                        used_rpm = true;
+                    }
+                    
+                    // Extract properties from the response
+                    if let Some(name) = all_props.get(&77) { // ObjectName
+                        if let Ok(parsed_name) = parse_string_from_response(name) {
+                            let cleaned_name = parsed_name.chars()
+                                .filter(|&c| c != '\0' && !c.is_control())
+                                .collect::<String>()
+                                .trim()
+                                .to_string();
+                            if !cleaned_name.is_empty() {
+                                device.objects[i].name = Some(cleaned_name);
+                            }
                         }
                     }
-                }
-
-                // Extract present value
-                if let Some(value) = all_props.get(&(PropertyIdentifier::PresentValue as u32)) {
-                    if let Ok(parsed_value) = parse_value_from_response(value) {
-                        device.objects[i].present_value = Some(parsed_value);
+                    
+                    if let Some(value) = all_props.get(&85) { // PresentValue
+                        if let Ok(parsed_value) = parse_value_from_response(value) {
+                            device.objects[i].present_value = Some(parsed_value);
+                        }
                     }
-                }
-                
-                // Extract units
-                if let Some(units_value) = all_props.get(&117) { // 117 = Units property ID
-                    if let Ok(parsed_units) = parse_units_from_response(units_value) {
-                        device.objects[i].units = Some(parsed_units);
-                    }
-                }
-            }
-
-            // Fallback: If we didn't get a name from ReadPropertyMultiple, try individual ReadProperty
-            if !got_name {
-                if let Ok(name_response) = read_object_property(socket, device, &device.objects[i], PropertyIdentifier::ObjectName as u32) {
-                    if let Ok(parsed_name) = parse_string_from_response(&name_response) {
-                        let cleaned_name = parsed_name.chars()
-                            .filter(|&c| c != '\0' && !c.is_control())
-                            .collect::<String>()
-                            .trim()
-                            .to_string();
-
-                        if !cleaned_name.is_empty() {
-                            device.objects[i].name = Some(cleaned_name);
-                            got_name = true;
+                    
+                    if let Some(units) = all_props.get(&117) { // Units
+                        if let Ok(parsed_units) = parse_units_from_response(units) {
+                            device.objects[i].units = Some(parsed_units);
                         }
                     }
                 }
             }
 
-            // Try to read present value if we don't have it yet
-            if device.objects[i].present_value.is_none() {
-                if let Ok(value_response) = read_object_property(socket, device, &device.objects[i], PropertyIdentifier::PresentValue as u32) {
-                    if let Ok(parsed_value) = parse_value_from_response(&value_response) {
-                        device.objects[i].present_value = Some(parsed_value);
-                    }
-                }
-            }
+            // DISABLED: No fallback to individual ReadProperty - only use ReadPropertyMultiple
+            // This ensures we only use ReadPropertyMultiple as requested
 
-            // Special handling for BELIMO devices - assign meaningful names to unnamed objects
-            // BELIMO Automation AG devices (particularly on Network 2001) have issues with object names:
-            // 1. Some objects have problematic names like ")MN" due to encoding issues
-            // 2. Some objects are unnamed despite having names in the device
-            // 3. Some objects have invalid encoding in their names
-            // This special handling assigns meaningful names based on object type and instance number
-            if !got_name && device.vendor_name.contains("BELIMO") {
+            // If we couldn't get a name, use a generic name based on object type and instance
+            if device.objects[i].name.is_none() {
                 let obj = &device.objects[i];
-
-                // Generate a meaningful name based on object type and instance
-                let default_name = match obj.object_type {
-                    ObjectType::AnalogInput => {
-                        match obj.instance {
-                            1 => "Temperature".to_string(),
-                            2 => "Relative_Humidity".to_string(),
-                            3 => "CO2_Value".to_string(),
-                            _ => format!("AnalogInput_{}", obj.instance)
-                        }
-                    },
-                    ObjectType::AnalogValue => {
-                        match obj.instance {
-                            100 => "TemperatureOffset".to_string(),
-                            101 => "HumidityOffset".to_string(),
-                            102 => "CO2Offset".to_string(),
-                            110 => "SetpointTemperature".to_string(),
-                            111 => "SetpointRelTemperature".to_string(),
-                            112 => "SetpointTemperatureDefault".to_string(),
-                            113 => "AdjustmentRangeSetpoint".to_string(),
-                            115 => "AirQualityGoodLimit".to_string(),
-                            116 => "BELIMO_Parameter".to_string(),
-                            117 => "BELIMO_Configuration".to_string(),
-                            _ => format!("AnalogValue_{}", obj.instance)
-                        }
-                    },
-                    ObjectType::BinaryValue => {
-                        match obj.instance {
-                            110 => "EnableLocalAdjustment".to_string(),
-                            111 => "ColorScheme".to_string(),
-                            112 => "ShowTemperature".to_string(),
-                            113 => "ShowRelHumidity".to_string(),
-                            114 => "ShowCO2".to_string(),
-                            115 => "ShowVentilationStages".to_string(),
-                            116 => "BELIMO_Parameter".to_string(),
-                            120 => "ShowWarningIcon".to_string(),
-                            121 => "ShowWindowIcon".to_string(),
-                            122 => "ShowHeatingCoolingIcon".to_string(),
-                            125 => "ShowAirQualityIndication".to_string(),
-                            _ => format!("BinaryValue_{}", obj.instance)
-                        }
-                    },
-                    ObjectType::MultiStateValue => {
-                        match obj.instance {
-                            100 => "UnitSelTemperatureDisplay".to_string(),
-                            103 => "SetpointType".to_string(),
-                            105 => "VentControlMode".to_string(),
-                            106 => "NumberVentilationStages".to_string(),
-                            110 => "TempDisplayMode".to_string(),
-                            111 => "ModeEcoButton".to_string(),
-                            112 => "ModeOnOffButton".to_string(),
-                            115 => "DisplayHeatingCoolingStatus".to_string(),
-                            116 => "BELIMO_Parameter".to_string(),
-                            117 => "BELIMO_Configuration".to_string(),
-                            118 => "OperationMode".to_string(),
-                            119 => "AirQualityStatus".to_string(),
-                            127 => "UnitSelTemperature".to_string(),
-                            128 => "UnitSelDeltaT".to_string(),
-                            _ => format!("MultiStateValue_{}", obj.instance)
-                        }
-                    },
-                    _ => format!("{}_{}", object_type_name(obj.object_type), obj.instance)
-                };
-
+                let default_name = format!("{}_{}", object_type_name(obj.object_type), obj.instance);
                 device.objects[i].name = Some(default_name);
             }
 
-            std::thread::sleep(Duration::from_millis(50)); // Small delay between reads
+            // Only add delay if we used individual ReadProperty (not for successful ReadPropertyMultiple)
+            if !used_rpm {
+                std::thread::sleep(Duration::from_millis(50)); // Small delay between reads
+            }
         }
     }
 
@@ -871,12 +775,12 @@ fn read_object_property_simple(socket: &UdpSocket, device: &BACnetDevice, object
     send_request_and_get_response(socket, device, &apdu, invoke_id)
 }
 
-fn read_all_object_properties(socket: &UdpSocket, device: &BACnetDevice, object: &BACnetObject) -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
-    static INVOKE_ID: AtomicU8 = AtomicU8::new(250);
+fn read_all_properties_rpm(socket: &UdpSocket, device: &BACnetDevice, object: &BACnetObject) -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
+    static INVOKE_ID: AtomicU8 = AtomicU8::new(100);
     let invoke_id = INVOKE_ID.fetch_add(1, Ordering::SeqCst);
     let invoke_id = if invoke_id == 0 { 1 } else { invoke_id };
 
-    // Create ReadPropertyMultiple request for ONLY ObjectName
+    // Create ReadPropertyMultiple request with ALL property
     let mut apdu = Vec::new();
     apdu.push(0x02); // Confirmed-Request (with segmentation bit)
     apdu.push(0x75); // Segmentation accepted, max APDU 1476
@@ -888,69 +792,190 @@ fn read_all_object_properties(socket: &UdpSocket, device: &BACnetDevice, object:
     apdu.push(0x0C); // Context tag 0, length 4
     apdu.extend_from_slice(&obj_id.to_be_bytes());
 
-    // Property list - request ObjectName, PresentValue, and Units
-    apdu.push(0x1E); // Opening tag 1
-
-    // Property: ObjectName (77)
-    apdu.push(0x09); // Context tag 0, length 1
-    apdu.push(77);   // Property ID 77 = Object_Name
-
-    // Property: PresentValue (85)
-    apdu.push(0x09); // Context tag 0, length 1
-    apdu.push(85);   // Property ID 85 = Present_Value
-
-    // Property: Units (117)
-    apdu.push(0x09); // Context tag 0, length 1
-    apdu.push(117);  // Property ID 117 = Units
-
+    // Property list - request ALL properties
+    apdu.push(0x1E); // Opening tag 1 (property list)
+    apdu.push(0x09); // Context tag 0, unsigned int, length 1
+    apdu.push(8);    // Property ID 8 = ALL
     apdu.push(0x1F); // Closing tag 1
 
     match send_request_and_get_response(socket, device, &apdu, invoke_id) {
         Ok(response) => {
-            // Debug - commented out
-            // if object.object_type == ObjectType::AnalogInput && (object.instance == 61 || object.instance == 18) {
-            //     println!("          Response length: {} bytes", response.len());
-            //     // Show hex response
-            //     if response.starts_with("0x") {
-            //         println!("          Response hex: {}", &response[2..]);
-            //     } else {
-            //         println!("          Response: {}", response);
-            //     }
-            // }
-
-            // if response.len() < 50 {
-            //     // Check if it's an error or abort response
-            //     if response.starts_with("0x") && response.len() > 2 {
-            //         let hex_str = &response[2..];
-            //         if let Ok(bytes) = decode_hex(hex_str) {
-            //             if bytes.len() > 1 {
-            //                 let pdu_type = (bytes[0] & 0xF0) >> 4;
-            //                 if pdu_type == 5 {
-            //                     println!("        {} {} returned ERROR response",
-            //                         object_type_name(object.object_type), object.instance);
-            //                 } else if pdu_type == 7 {
-            //                     println!("        {} {} returned ABORT response",
-            //                         object_type_name(object.object_type), object.instance);
-            //                 } else {
-            //                     println!("        {} {} returned short response: {} bytes",
-            //                         object_type_name(object.object_type), object.instance, response.len());
-            //                 }
-            //             }
-            //         }
-            //     }
-            // }
-
-            // Parse the response to extract all properties
-            let props = parse_all_properties_response(&response);
-            // No debug output needed
-            props
+            parse_rpm_all_response(&response)
         }
         Err(e) => {
-            // println!("        Error reading properties: {}", e);
-            // No fallback - return error
-            Err(e)
+            // Return empty map on error
+            Ok(HashMap::new())
         }
     }
+}
+
+fn parse_rpm_all_response(data: &str) -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
+    let mut properties = HashMap::new();
+    
+    if data.starts_with("0x") {
+        let hex_str = &data[2..];
+        if let Ok(bytes) = decode_hex(hex_str) {
+            let mut i = 0;
+            
+            let pdu_type = bytes[0] & 0xF0;
+            
+            // Handle different PDU types
+            if pdu_type == 0x30 { // Complex-ACK
+                i = 2; // Skip PDU type and invoke ID to get to service choice
+                
+                if i < bytes.len() && bytes[i] == 0x0E { // ReadPropertyMultiple ACK
+                    i += 1; // Skip service choice
+                    
+                    // Skip object ID (0x0C)
+                    if i + 4 < bytes.len() && bytes[i] == 0x0C {
+                        i += 5; // Skip tag and 4 bytes
+                        
+                        // Look for property list opening tag (0x1E)
+                        if i < bytes.len() && bytes[i] == 0x1E {
+                            i += 1;
+                            
+                            // Parse properties until closing tag
+                            while i < bytes.len() && bytes[i] != 0x1F {
+                                // Property ID (context tag 2)
+                                if bytes[i] == 0x29 && i + 1 < bytes.len() {
+                                    let prop_id = bytes[i + 1] as u32;
+                                    i += 2;
+                                    
+                                    // Skip opening tag 4E if present
+                                    if i < bytes.len() && bytes[i] == 0x4E {
+                                        i += 1;
+                                    }
+                                    
+                                    // Parse the value based on tag type
+                                    if i < bytes.len() {
+                                        let mut value_end = i;
+                                        
+                                        // Find the closing tag 4F
+                                        while value_end < bytes.len() && bytes[value_end] != 0x4F {
+                                            value_end += 1;
+                                        }
+                                        
+                                        // Parse value in this range
+                                        if value_end > i {
+                                            if let Ok(value) = decode_bacnet_value(&bytes[i..value_end]) {
+                                                properties.insert(prop_id, value);
+                                            }
+                                        }
+                                        
+                                        // Skip to after closing tag
+                                        if value_end < bytes.len() && bytes[value_end] == 0x4F {
+                                            i = value_end + 1;
+                                        } else {
+                                            i = value_end;
+                                        }
+                                    }
+                                } else if bytes[i] == 0x2A && i + 2 < bytes.len() {
+                                    // Context tag 2 with length 1 (0x2A) - list of property IDs at end
+                                    // Skip the entire list
+                                    i += 2;
+                                    while i < bytes.len() && bytes[i] == 0x91 {
+                                        i += 2; // Skip enumerated values
+                                    }
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    return Ok(properties);
+                }
+            } else if pdu_type == 0x50 { // Error
+                return Ok(properties);
+            } else if pdu_type == 0x60 || pdu_type == 0x70 { // Abort
+                return Ok(properties);
+            } else if pdu_type == 0x30 && (bytes[0] & 0x08) != 0 { // Segmented Complex-ACK
+                // For now, skip segmented responses
+                return Ok(properties);
+            } else if bytes[0] == 0x3C { // Segmented Complex-ACK
+                // This is a segmented response - check if it's the first segment
+                if (bytes[0] & 0x04) != 0 { // More segments follow
+                    return Ok(properties);
+                }
+                
+                // For segmented responses, the structure is different
+                // byte 0: PDU type/flags
+                // byte 1: invoke ID  
+                // byte 2-3: sequence number and window size
+                // byte 4+: service data
+                i = 4; // Skip to service data
+                
+                if i < bytes.len() && bytes[i] == 0x0E { // ReadPropertyMultiple ACK
+                    i += 1; // Skip service choice
+                    // Continue with normal parsing...
+                    // Skip object ID (0x0C)
+                    if i + 4 < bytes.len() && bytes[i] == 0x0C {
+                        i += 5; // Skip tag and 4 bytes
+                        
+                        // Look for property list opening tag (0x1E)
+                        if i < bytes.len() && bytes[i] == 0x1E {
+                            i += 1;
+                            
+                            // Parse properties until closing tag
+                            while i < bytes.len() && bytes[i] != 0x1F {
+                                // Property ID (context tag 2)
+                                if bytes[i] == 0x29 && i + 1 < bytes.len() {
+                                        let prop_id = bytes[i + 1] as u32;
+                                        i += 2;
+                                        
+                                        // Skip opening tag 4E if present
+                                        if i < bytes.len() && bytes[i] == 0x4E {
+                                            i += 1;
+                                        }
+                                        
+                                        // Parse the value based on tag type
+                                        if i < bytes.len() {
+                                            let mut value_end = i;
+                                            
+                                            // Find the closing tag 4F
+                                            while value_end < bytes.len() && bytes[value_end] != 0x4F {
+                                                value_end += 1;
+                                            }
+                                            
+                                            // Parse value in this range
+                                            if value_end > i {
+                                                if let Ok(value) = decode_bacnet_value(&bytes[i..value_end]) {
+                                                    properties.insert(prop_id, value);
+                                                }
+                                            }
+                                            
+                                            // Skip to after closing tag
+                                            if value_end < bytes.len() && bytes[value_end] == 0x4F {
+                                                i = value_end + 1;
+                                            } else {
+                                                i = value_end;
+                                            }
+                                        }
+                                } else if bytes[i] == 0x2A && i + 2 < bytes.len() {
+                                    // Context tag 2 with length 1 (0x2A) - list of property IDs at end
+                                    // Skip the entire list
+                                    i += 2;
+                                    while i < bytes.len() && bytes[i] == 0x91 {
+                                        i += 2; // Skip enumerated values
+                                    }
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                return Ok(properties);
+            } else {
+                return Ok(properties);
+            }
+        }
+    } else {
+        // Handle non-hex responses (shouldn't happen with our current implementation)
+        return Ok(properties);
+    }
+
+    Ok(properties)
 }
 
 fn read_object_property(socket: &UdpSocket, device: &BACnetDevice, object: &BACnetObject, property_id: u32) -> Result<String, Box<dyn std::error::Error>> {
@@ -1074,13 +1099,24 @@ fn send_request_and_get_response(socket: &UdpSocket, device: &BACnetDevice, apdu
                                         }
                                     }
 
-                                    // Try to parse as raw property data
-                                    return parse_raw_response(apdu_data);
+                                    // For ReadPropertyMultiple, return as hex for proper parsing
+                                    return Ok(format!("0x{}", hex::encode(apdu_data)));
                                 } else if pdu_type == 0x5 { // Error
+                                    if apdu_data.len() >= 4 {
+                                        let error_class = apdu_data[2];
+                                        let error_code = apdu_data[3];
+                                        return Err(format!("BACnet Error: class={}, code={}", error_class, error_code).into());
+                                    }
                                     return Err("Device returned error".into());
-                                } else if pdu_type == 0x7 { // Abort
-                                    // Device aborted the request - this is common for unsupported properties
+                                } else if pdu_type == 0x6 || pdu_type == 0x7 { // Abort
+                                    if apdu_data.len() >= 2 {
+                                        let abort_reason = apdu_data[1];
+                                        return Err(format!("BACnet Abort: reason={}", abort_reason).into());
+                                    }
                                     return Err("Property not supported (abort)".into());
+                                } else {
+                                    // Return raw response as hex for unsupported PDU types
+                                    return Ok(format!("0x{}", hex::encode(apdu_data)));
                                 }
                             }
                         }
@@ -1228,212 +1264,36 @@ fn display_comprehensive_summary(devices: &HashMap<u32, BACnetDevice>) {
             for (i, obj) in device.objects.iter().enumerate() {
                 // No limit - print all objects
 
-                let mut obj_name = match obj.name.as_deref() {
+                let obj_name = match obj.name.as_deref() {
                     Some("null") => "<unnamed>",
                     Some(name) => name,
                     None => "<unnamed>"
                 };
 
-                // Special handling for DEVICE 1 - fix swapped names and values
-                if device.device_id == 1 && device.network_number == 2001 {
-                    // For DEVICE 1 on Network 2001, the names and values are swapped
-                    // We need to use the correct mappings based on object type and instance
-                    obj_name = match (obj.object_type, obj.instance) {
-                        // MultiStateValue objects
-                        (ObjectType::MultiStateValue, 111) => "ModeEcoButton",
-                        (ObjectType::MultiStateValue, 115) => "DisplayHeatingCoolingStatus",
-                        (ObjectType::MultiStateValue, 127) => "UnitSelTemperature",
-                        (ObjectType::MultiStateValue, 112) => "ModeOnOffButton",
-                        (ObjectType::MultiStateValue, 110) => "TempDisplayMode",
-                        (ObjectType::MultiStateValue, 10) => "ManualAutomaticControlMode",
-                        (ObjectType::MultiStateValue, 117) => "WindowIconFunction",
-                        (ObjectType::MultiStateValue, 103) => "SetpointType",
-                        (ObjectType::MultiStateValue, 128) => "UnitSelDeltaT",
-                        (ObjectType::MultiStateValue, 100) => "UnitSelTemperatureDisplay",
-                        (ObjectType::MultiStateValue, 118) => "OperationMode",
-                        (ObjectType::MultiStateValue, 105) => "VentControlMode",
-                        (ObjectType::MultiStateValue, 119) => "AirQualityStatus",
-                        (ObjectType::MultiStateValue, 106) => "NumberVentilationStages",
-                        (ObjectType::MultiStateValue, 116) => "WarningIconFunction",
-
-                        // AnalogValue objects
-                        (ObjectType::AnalogValue, 111) => "SetpointRelTemperature",
-                        (ObjectType::AnalogValue, 12) => "DewPointTemperature",
-                        (ObjectType::AnalogValue, 116) => "AirQualityMediumLimit",
-                        (ObjectType::AnalogValue, 101) => "HumidityOffset",
-                        (ObjectType::AnalogValue, 113) => "AdjustmentRangeSetpoint",
-                        (ObjectType::AnalogValue, 115) => "AirQualityGoodLimit",
-                        (ObjectType::AnalogValue, 110) => "SetpointTemperature",
-                        (ObjectType::AnalogValue, 130) => "BusWatchdog",
-                        (ObjectType::AnalogValue, 100) => "TemperatureOffset",
-                        (ObjectType::AnalogValue, 102) => "CO2Offset",
-                        (ObjectType::AnalogValue, 15) => "VentilationSetpoint",
-                        (ObjectType::AnalogValue, 112) => "SetpointTemperatureDefault",
-                        (ObjectType::AnalogValue, 117) => "BoostModeDuration",
-
-                        // BinaryValue objects
-                        (ObjectType::BinaryValue, 112) => "ShowTemperature",
-                        (ObjectType::BinaryValue, 125) => "ShowAirQualityIndication",
-                        (ObjectType::BinaryValue, 99) => "BusTermination",
-                        (ObjectType::BinaryValue, 121) => "ShowWindowIcon",
-                        (ObjectType::BinaryValue, 111) => "ColorScheme",
-                        (ObjectType::BinaryValue, 122) => "ShowHeatingCoolingIcon",
-                        (ObjectType::BinaryValue, 120) => "ShowWarningIcon",
-                        (ObjectType::BinaryValue, 114) => "ShowCO2",
-                        (ObjectType::BinaryValue, 113) => "ShowRelHumidity",
-                        (ObjectType::BinaryValue, 116) => "ShowBoostButton",
-                        (ObjectType::BinaryValue, 110) => "EnableLocalAdjustment",
-                        (ObjectType::BinaryValue, 115) => "ShowVentilationStages",
-
-                        // AnalogInput objects
-                        (ObjectType::AnalogInput, 1) => "Temperature",
-                        (ObjectType::AnalogInput, 2) => "Relative_Humidity",
-                        (ObjectType::AnalogInput, 3) => "CO2_Value",
-
-                        // BinaryInput objects
-                        (ObjectType::BinaryInput, 10) => "DigitalInput",
-
-                        // Device object
-                        (ObjectType::Device, 1) => "ROU",
-
-                        // Default case - use the object_type_name function to get a descriptive name
-                        _ => object_type_name(obj.object_type)
-                    };
-                }
-                // Final check for BELIMO devices - ensure problematic names are replaced
-                else if device.vendor_name.contains("BELIMO") {
-                    // Replace ")MN" with more meaningful names based on object type and instance
-                    if obj_name == ")MN" || obj_name.contains(")MN") {
-                        obj_name = match obj.object_type {
-                            ObjectType::AnalogValue if obj.instance == 116 => "AirQualityMediumLimit",
-                            ObjectType::BinaryValue if obj.instance == 116 => "ShowBoostButton",
-                            ObjectType::MultiStateValue if obj.instance == 116 => "WarningIconFunction",
-                            _ => "BELIMO_Parameter"
-                        };
-                    }
-
-                    // Replace generic "BELIMO_Configuration" with more specific names
-                    if obj_name == "BELIMO_Configuration" {
-                        obj_name = match obj.object_type {
-                            ObjectType::MultiStateValue if obj.instance == 117 => "WindowIconFunction",
-                            ObjectType::AnalogValue if obj.instance == 117 => "BoostModeDuration",
-                            _ => obj_name
-                        };
-                    }
-
-                    // Fix abbreviated or typo-containing names for DEVICE 1
-                    // These are names that are read successfully from the device but are abbreviated or have typos
-                    if obj_name == "DispHeatCoolSt" && obj.object_type == ObjectType::MultiStateValue && obj.instance == 115 {
-                        obj_name = "DisplayHeatingCoolingStatus";
-                    } else if obj_name == "Relative_Humdity" && obj.object_type == ObjectType::AnalogInput && obj.instance == 2 {
-                        obj_name = "Relative_Humidity";
-                    } else if obj_name == "EnLocalAdjustment" && obj.object_type == ObjectType::BinaryValue && obj.instance == 110 {
-                        obj_name = "EnableLocalAdjustment";
-                    }
-
-                    // Replace any remaining unnamed objects with type-specific names
-                    if obj_name == "<unnamed>" {
-                        // Use a comprehensive match with specific cases for all BELIMO object types and instances
-                        obj_name = match (obj.object_type, obj.instance) {
-                            // MultiStateValue objects
-                            (ObjectType::MultiStateValue, 128) => "UnitSelDeltaT",
-                            (ObjectType::MultiStateValue, 117) => "WindowIconFunction",
-                            (ObjectType::MultiStateValue, 116) => "WarningIconFunction",
-                            (ObjectType::MultiStateValue, 100) => "UnitSelTemperatureDisplay",
-                            (ObjectType::MultiStateValue, 103) => "SetpointType",
-                            (ObjectType::MultiStateValue, 105) => "VentControlMode",
-                            (ObjectType::MultiStateValue, 106) => "NumberVentilationStages",
-                            (ObjectType::MultiStateValue, 110) => "TempDisplayMode",
-                            (ObjectType::MultiStateValue, 111) => "ModeEcoButton",
-                            (ObjectType::MultiStateValue, 112) => "ModeOnOffButton",
-                            (ObjectType::MultiStateValue, 115) => "DisplayHeatingCoolingStatus",
-                            (ObjectType::MultiStateValue, 118) => "OperationMode",
-                            (ObjectType::MultiStateValue, 119) => "AirQualityStatus",
-                            (ObjectType::MultiStateValue, 127) => "UnitSelTemperature",
-
-                            // AnalogValue objects
-                            (ObjectType::AnalogValue, 115) => "AirQualityGoodLimit",
-                            (ObjectType::AnalogValue, 116) => "AirQualityMediumLimit",
-                            (ObjectType::AnalogValue, 117) => "BoostModeDuration",
-                            (ObjectType::AnalogValue, 100) => "TemperatureOffset",
-                            (ObjectType::AnalogValue, 101) => "HumidityOffset",
-                            (ObjectType::AnalogValue, 102) => "CO2Offset",
-                            (ObjectType::AnalogValue, 110) => "SetpointTemperature",
-                            (ObjectType::AnalogValue, 111) => "SetpointRelTemperature",
-                            (ObjectType::AnalogValue, 112) => "SetpointTemperatureDefault",
-                            (ObjectType::AnalogValue, 113) => "AdjustmentRangeSetpoint",
-                            (ObjectType::AnalogValue, 12) => "DewPointTemperature",
-                            (ObjectType::AnalogValue, 15) => "VentilationSetpoint",
-                            (ObjectType::AnalogValue, 130) => "BusWatchdog",
-
-                            // BinaryValue objects
-                            (ObjectType::BinaryValue, 116) => "ShowBoostButton",
-                            (ObjectType::BinaryValue, 99) => "BusTermination",
-                            (ObjectType::BinaryValue, 110) => "EnableLocalAdjustment",
-                            (ObjectType::BinaryValue, 111) => "ColorScheme",
-                            (ObjectType::BinaryValue, 112) => "ShowTemperature",
-                            (ObjectType::BinaryValue, 113) => "ShowRelHumidity",
-                            (ObjectType::BinaryValue, 114) => "ShowCO2",
-                            (ObjectType::BinaryValue, 115) => "ShowVentilationStages",
-                            (ObjectType::BinaryValue, 120) => "ShowWarningIcon",
-                            (ObjectType::BinaryValue, 121) => "ShowWindowIcon",
-                            (ObjectType::BinaryValue, 122) => "ShowHeatingCoolingIcon",
-                            (ObjectType::BinaryValue, 125) => "ShowAirQualityIndication",
-
-                            // AnalogInput objects
-                            (ObjectType::AnalogInput, 1) => "Temperature",
-                            (ObjectType::AnalogInput, 2) => "Relative_Humidity",
-                            (ObjectType::AnalogInput, 3) => "CO2_Value",
-
-                            // BinaryInput objects
-                            (ObjectType::BinaryInput, 10) => "DigitalInput",
-
-                            // Device object
-                            (ObjectType::Device, 1) => "ROU",
-
-                            // Default case - use the object_type_name function to get a descriptive name
-                            _ => object_type_name(obj.object_type)
-                        };
-                    }
-                }
-
                 let type_name = object_type_name(obj.object_type);
 
-                // Check if present_value is the same as object name to avoid duplication
+                // Skip objects without actual values (as requested)
+                if obj.present_value.is_none() || obj.present_value.as_deref() == Some("N/A") {
+                    continue;
+                }
+                
+                // Skip I/O objects without units (as requested)
+                if is_io_object(obj.object_type) && obj.units.is_none() {
+                    continue;
+                }
+                
+                // Show objects with values (and units for I/O objects)
                 let value_str = obj.present_value.as_deref().unwrap_or("N/A");
                 let units_str = obj.units.as_deref().unwrap_or("");
                 
-                // For Device 1, check if value is the same as name or a substring to avoid duplication
-                if device.device_id == 1 && (value_str == obj_name || 
-                   (value_str != "N/A" && (obj_name.contains(value_str) || value_str.contains(obj_name)))) {
-                    // Only show name and units if present
-                    if !units_str.is_empty() {
-                        println!("      {:2}. {} {} - {} ({})", 
-                            i + 1, 
-                            type_name, 
-                            obj.instance, 
-                            obj_name, 
-                            units_str
-                        );
-                    } else {
-                        println!("      {:2}. {} {} - {}", 
-                            i + 1, 
-                            type_name, 
-                            obj.instance, 
-                            obj_name
-                        );
-                    }
-                } else {
-                    // Normal case - show name, value, and units
-                    println!("      {:2}. {} {} - {} = {} {}", 
-                        i + 1, 
-                        type_name, 
-                        obj.instance, 
-                        obj_name, 
-                        value_str, 
-                        units_str
-                    );
-                }
+                println!("      {:2}. {} {} - {} = {} {}", 
+                    i + 1, 
+                    type_name, 
+                    obj.instance, 
+                    obj_name, 
+                    value_str, 
+                    units_str
+                );
             }
         } else {
             println!("   OBJECTS: Unable to read object list");
@@ -2293,186 +2153,6 @@ fn parse_bacnet_application_tag(data: &[u8]) -> Result<String, Box<dyn std::erro
             Ok(format!("Tag{}:0x{}", tag_number, hex::encode(value_data)))
         }
     }
-}
-
-fn parse_all_properties_response(data: &str) -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
-    let mut properties = HashMap::new();
-
-    // Handle hex-encoded response
-    if data.starts_with("0x") {
-        let hex_str = &data[2..];
-        if let Ok(bytes) = decode_hex(hex_str) {
-            // println!("        Parsing ReadPropertyMultiple response, {} bytes", bytes.len());
-
-            // Skip Complex-ACK PDU header and service choice
-            let mut i = 0;
-
-            // Skip Complex-ACK PDU header and look for service choice 0x0E
-            let mut service_choice_pos = None;
-            for j in 0..std::cmp::min(10, bytes.len()) {
-                if bytes[j] == 0x0E {
-                    service_choice_pos = Some(j);
-                    break;
-                }
-            }
-
-            if let Some(pos) = service_choice_pos {
-                i = pos + 1; // Start after service choice
-            } else if bytes.len() > 20 {
-                // No service choice found
-                if bytes[0] == 0x50 || bytes[0] == 0x70 {
-                    return Ok(properties); // Error or abort response
-                }
-                return Ok(properties); // Can't parse without service choice
-            }
-
-            // Debug removed - parsing works correctly
-
-            // In ReadPropertyMultiple response after service choice, we have:
-            // 0E (opening tag for object 0)
-            // 0C (object identifier)
-            // 1E (opening tag for property list)
-            // ...
-            // 1F (closing tag for property list)
-            // 0F (closing tag for object 0)
-
-            // Look for opening tag 0E (context tag for list of read access results)
-            if i < bytes.len() && bytes[i] == 0x0E {
-                i += 1; // Skip opening tag
-
-                // Now look for object identifier (0x0C)
-                if i + 4 < bytes.len() && bytes[i] == 0x0C {
-                    i += 5; // Skip object identifier (tag + 4 bytes)
-
-                    // Now we should be at the property list opening tag (0x1E)
-                    if i < bytes.len() && bytes[i] == 0x1E {
-                        i += 1;
-
-                        // Parse properties until closing tag (0x1F)
-                        let mut _prop_count = 0;
-                        while i < bytes.len() && bytes[i] != 0x1F {
-                            // Look for property identifier context tags (0x29)
-                            if bytes[i] == 0x29 && i + 1 < bytes.len() {
-                                _prop_count += 1;
-                                let prop_id = bytes[i + 1] as u32;
-                                i += 2;
-
-                                // Skip opening tag 4E if present (property value opening tag)
-                                if i < bytes.len() && bytes[i] == 0x4E {
-                                    i += 1;
-                                }
-
-                                // Now parse the value
-                                if i < bytes.len() {
-
-                                    // Try to determine the length of the value
-                                    let value_result = parse_bacnet_application_tag(&bytes[i..]);
-                                    match value_result {
-                                        Ok(value) => {
-                                            properties.insert(prop_id, value);
-                                            // Skip past the value (estimate based on tag type)
-                                            if i < bytes.len() {
-                                                let tag = bytes[i];
-                                                let tag_number = (tag >> 4) & 0x0F;
-                                                let length_value = tag & 0x07;
-
-                                                // Calculate skip length more accurately
-                                                let skip_len = if tag_number == 7 && length_value == 5 {
-                                                    // Character string with extended length
-                                                    if i + 1 < bytes.len() {
-                                                        let str_len = bytes[i + 1] as usize;
-                                                        2 + str_len // tag + length byte + string data
-                                                    } else {
-                                                        2
-                                                    }
-                                                } else if length_value <= 4 {
-                                                    1 + length_value as usize
-                                                } else if length_value == 5 && i + 1 < bytes.len() {
-                                                    2 + bytes[i + 1] as usize
-                                                } else {
-                                                    1
-                                                };
-                                                i += skip_len;
-                                            } else {
-                                                i += 1;
-                                            }
-                                        }
-                                        Err(_e) => {
-                                            // Debug error - commented out
-                                            // println!("        Failed to parse value for property {}: {}", prop_id, e);
-                                            i += 1;
-                                        }
-                                    }
-
-                                    // Skip closing tag 4F if present
-                                    if i < bytes.len() && bytes[i] == 0x4F {
-                                        i += 1;
-                                    }
-                                } else {
-                                    i += 1;
-                                }
-                            } else if bytes[i] == 0x59 && i + 1 < bytes.len() {
-                                // Context tag 5 (property identifier) with 2-byte encoding
-                                let prop_id = ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
-                                i += 3;
-
-                                // Skip opening tag 4E if present
-                                if i < bytes.len() && bytes[i] == 0x4E {
-                                    i += 1;
-                                }
-
-                                // Parse value
-                                if i < bytes.len() {
-                                    if let Ok(value) = parse_bacnet_application_tag(&bytes[i..]) {
-                                        properties.insert(prop_id, value);
-                                        // Skip the parsed value
-                                        let tag = bytes[i];
-                                        let length_value = tag & 0x07;
-                                        let skip_len = if length_value <= 4 {
-                                            1 + length_value as usize
-                                        } else if length_value == 5 && i + 1 < bytes.len() {
-                                            2 + bytes[i + 1] as usize
-                                        } else {
-                                            1
-                                        };
-                                        i += skip_len;
-                                    } else {
-                                        i += 1;
-                                    }
-                                }
-
-                                if i < bytes.len() && bytes[i] == 0x4F {
-                                    i += 1;
-                                }
-                            } else {
-                                i += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Debug - commented out
-    // if data.starts_with("0x") && properties.is_empty() {
-    //     let hex_str = &data[2..];
-    //     if let Ok(bytes) = decode_hex(hex_str) {
-    //         if bytes.len() > 60 {
-    //             println!("        WARNING: {} byte response but no properties parsed!", bytes.len());
-    //             // Show first few bytes to debug
-    //             if bytes.len() > 20 {
-    //                 print!("        First 20 bytes: ");
-    //                 for j in 0..20 {
-    //                     print!("{:02X} ", bytes[j]);
-    //                 }
-    //                 println!();
-    //             }
-    //         }
-    //     }
-    // }
-    // println!("        Parsed {} properties from response", properties.len());
-    Ok(properties)
 }
 
 fn get_property_name(prop_id: u32) -> &'static str {
