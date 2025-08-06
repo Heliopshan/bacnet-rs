@@ -9,12 +9,19 @@ use bacnet_rs::{
     datalink::bip::{BvlcHeader, BvlcFunction},
     vendor::get_vendor_name,
     object::{ObjectType, PropertyIdentifier},
+    encoding::{
+        decode_application_tag, decode_unsigned, 
+        decode_real, decode_enumerated, decode_signed,
+        ApplicationTag
+    },
 };
+use encoding_rs::{UTF_16BE, UTF_8};
 use std::{
     net::{SocketAddr, UdpSocket},
     time::{Duration, Instant},
     collections::HashMap,
     sync::atomic::{AtomicU8, Ordering},
+    io::Write,
 };
 
 const BACNET_PORT: u16 = 0xBAC0; // 47808
@@ -319,21 +326,24 @@ fn collect_i_am_responses(socket: &UdpSocket, devices: &mut HashMap<u32, BACnetD
                                             vec![]
                                         };
 
-                                        let device = BACnetDevice {
-                                            device_id,
-                                            network_number,
-                                            mac_address,
-                                            socket_addr: src_addr,
-                                            vendor_id,
-                                            vendor_name: get_vendor_name(vendor_id as u16).unwrap_or("Unknown").to_string(),
-                                            model_name: None,
-                                            firmware_revision: None,
-                                            max_apdu: i_am.max_apdu_length_accepted as u16,
-                                            segmentation: i_am.segmentation_supported as u8,
-                                            objects: Vec::new(),
-                                        };
+                                        // Only insert if device doesn't already exist
+                                        if !devices.contains_key(&device_id) {
+                                            let device = BACnetDevice {
+                                                device_id,
+                                                network_number,
+                                                mac_address,
+                                                socket_addr: src_addr,
+                                                vendor_id,
+                                                vendor_name: get_vendor_name(vendor_id as u16).unwrap_or("Unknown").to_string(),
+                                                model_name: None,
+                                                firmware_revision: None,
+                                                max_apdu: i_am.max_apdu_length_accepted as u16,
+                                                segmentation: i_am.segmentation_supported as u8,
+                                                objects: Vec::new(),
+                                            };
 
-                                        devices.insert(device_id, device);
+                                            devices.insert(device_id, device);
+                                        }
                                     }
                                 }
                             }
@@ -412,12 +422,19 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
 
     // Read details for each object if we found any
     if object_count > 1 { // More than just the device object
-        println!("      Reading object details using ReadPropertyMultiple...");
+        println!("      Reading object details using ReadPropertyMultiple...
+      Progress: ");
         let objects_to_read = device.objects.len(); // Read all objects
         let use_rpm_all = true; // Option to use ReadPropertyMultiple with ALL
 
 
         for i in 0..objects_to_read {
+            // Show progress every 5 objects for better feedback
+            if i % 5 == 0 {
+                print!("\r      Progress: {}/{} objects scanned", i, objects_to_read);
+                std::io::stdout().flush().unwrap();
+            }
+            
             let mut used_rpm = false;
             
             // Try ReadPropertyMultiple with ALL first
@@ -426,31 +443,37 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
                     // Check if we got properties
                     if !all_props.is_empty() {
                         used_rpm = true;
+                        // Successfully got properties
+                        
+                        // Debug for BELIMO device to see what properties are returned
+                        if device.network_number == 2001 && !all_props.contains_key(&77) {
+                            println!("        DEBUG: {} {} missing ObjectName, got properties: {:?}", 
+                                     object_type_name(device.objects[i].object_type),
+                                     device.objects[i].instance,
+                                     all_props.keys().collect::<Vec<_>>());
+                        }
                     }
                     
                     // Extract properties from the response
                     if let Some(name) = all_props.get(&77) { // ObjectName
-                        if let Ok(parsed_name) = parse_string_from_response(name) {
-                            let cleaned_name = parsed_name.chars()
-                                .filter(|&c| c != '\0' && !c.is_control())
-                                .collect::<String>()
-                                .trim()
-                                .to_string();
-                            if !cleaned_name.is_empty() {
-                                device.objects[i].name = Some(cleaned_name);
-                            }
+                        // For RPM with ALL, we get the full string directly
+                        // Skip empty or null names
+                        if !name.is_empty() && name != "null" {
+                            device.objects[i].name = Some(name.clone());
                         }
                     }
                     
                     if let Some(value) = all_props.get(&85) { // PresentValue
-                        if let Ok(parsed_value) = parse_value_from_response(value) {
-                            device.objects[i].present_value = Some(parsed_value);
-                        }
+                        // Store the raw value string for now
+                        device.objects[i].present_value = Some(value.clone());
                     }
                     
                     if let Some(units) = all_props.get(&117) { // Units
+                        // Use the existing parse_units_from_response function
                         if let Ok(parsed_units) = parse_units_from_response(units) {
                             device.objects[i].units = Some(parsed_units);
+                        } else {
+                            device.objects[i].units = Some(units.clone());
                         }
                     }
                 }
@@ -471,9 +494,65 @@ fn analyze_device(socket: &UdpSocket, device: &mut BACnetDevice) -> Result<(), B
                 std::thread::sleep(Duration::from_millis(50)); // Small delay between reads
             }
         }
+        // Clear the progress line and show completion
+        print!("\r      Progress: {}/{} objects scanned - Complete!\n", objects_to_read, objects_to_read);
+        std::io::stdout().flush().unwrap();
     }
-
-
+    
+    // Display objects
+    if !device.objects.is_empty() {
+        println!("   OBJECTS ({} total):", device.objects.len());
+        
+        // Track objects where property ID 8 (ALL) didn't work
+        let mut objects_without_names = Vec::new();
+        
+        // Show ALL objects - always display at minimum the name
+        for (i, obj) in device.objects.iter().enumerate() {
+            let type_name = object_type_name(obj.object_type);
+            let default_name = format!("{}_{}", type_name, obj.instance);
+            let has_default_name = obj.name.as_ref().map_or(false, |n| n == &default_name);
+            let obj_name = obj.name.as_deref().unwrap_or(&default_name);
+            
+            // Track objects using default names (property ID 8 didn't return ObjectName)
+            if has_default_name || obj.name.is_none() {
+                objects_without_names.push((type_name, obj.instance));
+            }
+            
+            // Always show object type, instance and name
+            print!("      {:3}. {} {:>3} - {}", 
+                i + 1, 
+                type_name, 
+                obj.instance, 
+                obj_name
+            );
+            
+            // If there's a present value, add it
+            if let Some(value) = &obj.present_value {
+                if !value.is_empty() {
+                    print!(" = {}", value);
+                    
+                    // If there's also units, add them
+                    if let Some(units) = &obj.units {
+                        if !units.is_empty() && units != "no-units" {
+                            print!(" {}", units);
+                        }
+                    }
+                }
+            }
+            
+            println!();
+        }
+        
+        // Report objects where property ID 8 (ALL) didn't work
+        if !objects_without_names.is_empty() {
+            println!("\n   WARNING: Objects where property ID 8 (ALL) did not return ObjectName:");
+            for (obj_type, instance) in objects_without_names {
+                println!("      - {} {}", obj_type, instance);
+            }
+        }
+    } else {
+        println!("   OBJECTS: Unable to read object list");
+    }
 
     Ok(())
 }
@@ -775,6 +854,7 @@ fn read_object_property_simple(socket: &UdpSocket, device: &BACnetDevice, object
     send_request_and_get_response(socket, device, &apdu, invoke_id)
 }
 
+
 fn read_all_properties_rpm(socket: &UdpSocket, device: &BACnetDevice, object: &BACnetObject) -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
     static INVOKE_ID: AtomicU8 = AtomicU8::new(100);
     let invoke_id = INVOKE_ID.fetch_add(1, Ordering::SeqCst);
@@ -798,18 +878,659 @@ fn read_all_properties_rpm(socket: &UdpSocket, device: &BACnetDevice, object: &B
     apdu.push(8);    // Property ID 8 = ALL
     apdu.push(0x1F); // Closing tag 1
 
-    match send_request_and_get_response(socket, device, &apdu, invoke_id) {
+    // Use shorter timeout for RPM requests to avoid getting stuck
+    // Adjust timeout based on device - some devices are slower
+    let timeout = if device.device_id == 5047 {
+        Duration::from_millis(150) // Even shorter timeout for device 5047
+    } else {
+        Duration::from_millis(250)
+    };
+    match send_request_and_get_response_with_timeout(socket, device, &apdu, invoke_id, timeout) {
         Ok(response) => {
+            // Debug for BELIMO device
+            if device.network_number == 2001 {
+                if response.starts_with("0x50") {
+                    println!("        DEBUG: BELIMO device returned error response for {} {}", 
+                             object_type_name(object.object_type), object.instance);
+                } else if response.len() > 10 {
+                    // Check if this looks like a property list response
+                    if response.contains("2a01") || response.contains("2a02") {
+                        println!("        DEBUG: BELIMO {} {} returned property list format", 
+                                 object_type_name(object.object_type), object.instance);
+                    }
+                }
+            }
             parse_rpm_all_response(&response)
         }
         Err(e) => {
+            // Debug errors for BELIMO device
+            if device.network_number == 2001 {
+                println!("        DEBUG: BELIMO device RPM request failed for {} {}: {}", 
+                         object_type_name(object.object_type), object.instance, e);
+            }
             // Return empty map on error
             Ok(HashMap::new())
         }
     }
 }
 
+
 fn parse_rpm_all_response(data: &str) -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
+    let mut properties = HashMap::new();
+    
+    if data.starts_with("0x") {
+        let hex_str = &data[2..];
+        if let Ok(bytes) = decode_hex(hex_str) {
+            // Check for error PDU
+            if bytes.len() > 0 && bytes[0] == 0x50 {
+                return Ok(properties);
+            }
+            
+            // Debug: Show first 100 bytes for problematic responses
+            if bytes.len() > 20 && bytes.windows(2).any(|w| w[0] > 127 || w[1] > 127) {
+                let preview: String = bytes.iter().take(100)
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .chunks(2)
+                    .map(|c| c.join(""))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                println!("        DEBUG: Raw response with high bytes: {}", preview);
+            }
+            
+            // Skip PDU header if present
+            let mut start_pos = 0;
+            if bytes.len() > 3 && (bytes[0] == 0x30 || bytes[0] == 0x3C) {
+                start_pos = if bytes[0] == 0x30 { 3 } else { 5 }; // Skip PDU header
+            }
+            
+            // For property ID 8 (ALL), we might get a structured response
+            // Look for property-value pairs
+            let mut i = start_pos;
+            let mut in_property_list = false;
+            
+            while i < bytes.len() {
+                // Check for opening/closing tags
+                if bytes[i] == 0x1E {
+                    in_property_list = true;
+                    i += 1;
+                    continue;
+                }
+                if bytes[i] == 0x1F {
+                    in_property_list = false;
+                    i += 1;
+                    continue;
+                }
+                
+                // Look for property identifier context tags (0x28, 0x29, 0x2A, etc)
+                if i + 1 < bytes.len() && (bytes[i] & 0xF8) == 0x28 {
+                    let prop_id = bytes[i + 1] as u32;
+                    i += 2;
+                    
+                    // Look for the value after property ID
+                    if i < bytes.len() && bytes[i] == 0x4E { // Opening tag for value
+                        i += 1;
+                        
+                        // Now decode the actual value
+                        if i < bytes.len() {
+                            match bytes[i] {
+                                0x75 => { // Character string
+                                    if let Some((value, consumed)) = decode_any_bacnet_value(&bytes[i..]) {
+                                        if prop_id == 77 { // ObjectName
+                                            let cleaned: String = value.chars()
+                                                .filter(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+                                                .collect();
+                                            if !cleaned.is_empty() {
+                                                properties.insert(77, cleaned);
+                                            }
+                                        }
+                                        i += consumed;
+                                    } else {
+                                        i += 1;
+                                    }
+                                }
+                                0x44 => { // Real
+                                    if let Some((value, consumed)) = decode_any_bacnet_value(&bytes[i..]) {
+                                        if prop_id == 85 { // PresentValue
+                                            properties.insert(85, value);
+                                        }
+                                        i += consumed;
+                                    } else {
+                                        i += 1;
+                                    }
+                                }
+                                0x91 => { // Enumerated
+                                    if prop_id == 117 { // Units
+                                        if let Ok((enum_val, consumed)) = decode_enumerated(&bytes[i..]) {
+                                            if let Some(unit_str) = get_units_string(enum_val) {
+                                                properties.insert(117, unit_str);
+                                            }
+                                            i += consumed;
+                                        } else {
+                                            i += 1;
+                                        }
+                                    } else {
+                                        i += 1;
+                                    }
+                                }
+                                _ => i += 1,
+                            }
+                        }
+                        
+                        // Skip closing tag if present
+                        if i < bytes.len() && bytes[i] == 0x4F {
+                            i += 1;
+                        }
+                    }
+                } else {
+                    // Simple scanning for values without property context
+                    match bytes[i] {
+                        0x75 => { // Character string
+                            if let Some((value, consumed)) = decode_any_bacnet_value(&bytes[i..]) {
+                                let cleaned: String = value.chars()
+                                    .filter(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+                                    .collect();
+                                
+                                if !cleaned.is_empty() && cleaned != "null" && !properties.contains_key(&77) {
+                                    properties.insert(77, cleaned); // ObjectName
+                                }
+                                i += consumed;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        0x44 => { // Real
+                            if let Some((value, consumed)) = decode_any_bacnet_value(&bytes[i..]) {
+                                if !properties.contains_key(&85) {
+                                    properties.insert(85, value); // PresentValue
+                                }
+                                i += consumed;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        0x91 => { // Enumerated
+                            if !properties.contains_key(&117) {
+                                if let Ok((enum_val, consumed)) = decode_enumerated(&bytes[i..]) {
+                                    if let Some(unit_str) = get_units_string(enum_val) {
+                                        properties.insert(117, unit_str); // Units
+                                    }
+                                    i += consumed;
+                                } else {
+                                    i += 1;
+                                }
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(properties)
+}
+
+// Helper function to get units string
+fn get_units_string(units_enum: u32) -> Option<String> {
+    let unit_str = match units_enum {
+        // Acceleration
+        166 => "m/s²",
+        
+        // Area
+        0 => "m²",
+        116 => "cm²",
+        1 => "ft²",
+        115 => "in²",
+        
+        // Currency
+        105 => "currency1",
+        106 => "currency2",
+        107 => "currency3",
+        108 => "currency4",
+        109 => "currency5",
+        110 => "currency6",
+        111 => "currency7",
+        112 => "currency8",
+        113 => "currency9",
+        114 => "currency10",
+        
+        // Electrical
+        2 => "mA",
+        3 => "A",
+        167 => "A/m",
+        168 => "A/m²",
+        169 => "A·m²",
+        199 => "dB",
+        200 => "dBmV",
+        201 => "dBV",
+        170 => "F",
+        171 => "H",
+        4 => "Ω",
+        237 => "Ω·m²/m",
+        172 => "Ω·m",
+        145 => "mΩ",
+        122 => "kΩ",
+        123 => "MΩ",
+        190 => "μS",
+        202 => "mS",
+        173 => "S",
+        174 => "S/m",
+        175 => "T",
+        5 => "V",
+        124 => "mV",
+        6 => "kV",
+        7 => "MV",
+        8 => "VA",
+        9 => "kVA",
+        10 => "MVA",
+        11 => "VAr",
+        12 => "kVAr",
+        13 => "MVAr",
+        176 => "V/°K",
+        177 => "V/m",
+        14 => "°",
+        15 => "power factor",
+        178 => "Wb",
+        
+        // Energy
+        238 => "A·s",
+        239 => "VA·h",
+        240 => "kVA·h",
+        241 => "MVA·h",
+        242 => "VAr·h",
+        243 => "kVAr·h",
+        244 => "MVAr·h",
+        245 => "V²·h",
+        246 => "A²·h",
+        16 => "J",
+        17 => "kJ",
+        125 => "kJ/kg",
+        126 => "MJ",
+        18 => "W·h",
+        19 => "kW·h",
+        146 => "MW·h",
+        203 => "W·h reactive",
+        204 => "kW·h reactive",
+        205 => "MW·h reactive",
+        20 => "BTU",
+        147 => "kBTU",
+        148 => "MBTU",
+        21 => "therm",
+        22 => "ton·h",
+        
+        // Enthalpy
+        23 => "J/kg dry air",
+        149 => "kJ/kg dry air",
+        150 => "MJ/kg dry air",
+        24 => "BTU/lb dry air",
+        117 => "BTU/lb",
+        
+        // Entropy
+        127 => "J/°K",
+        151 => "kJ/°K",
+        152 => "MJ/°K",
+        128 => "J/kg·°K",
+        
+        // Force
+        153 => "N",
+        
+        // Frequency
+        25 => "cycles/h",
+        26 => "cycles/min",
+        27 => "Hz",
+        129 => "kHz",
+        130 => "MHz",
+        131 => "/h",
+        
+        // Humidity
+        28 => "g water/kg dry air",
+        29 => "%RH",
+        
+        // Length
+        194 => "μm",
+        30 => "mm",
+        118 => "cm",
+        193 => "km",
+        31 => "m",
+        32 => "in",
+        33 => "ft",
+        
+        // Light
+        179 => "cd",
+        180 => "cd/m²",
+        34 => "W/ft²",
+        35 => "W/m²",
+        36 => "lm",
+        37 => "lux",
+        38 => "fc",
+        
+        // Mass
+        196 => "mg",
+        195 => "g",
+        39 => "kg",
+        40 => "lb",
+        41 => "ton",
+        
+        // Mass Flow
+        154 => "g/s",
+        155 => "g/min",
+        42 => "kg/s",
+        43 => "kg/min",
+        44 => "kg/h",
+        119 => "lb/s",
+        45 => "lb/min",
+        46 => "lb/h",
+        156 => "ton/h",
+        
+        // Power
+        132 => "mW",
+        47 => "W",
+        48 => "kW",
+        49 => "MW",
+        50 => "BTU/h",
+        157 => "kBTU/h",
+        247 => "J/h",
+        51 => "hp",
+        52 => "ton refrigeration",
+        
+        // Pressure
+        53 => "Pa",
+        133 => "hPa",
+        54 => "kPa",
+        134 => "mbar",
+        55 => "bar",
+        56 => "psi",
+        206 => "mmH₂O",
+        57 => "cmH₂O",
+        58 => "inH₂O",
+        59 => "mmHg",
+        60 => "cmHg",
+        61 => "inHg",
+        
+        // Temperature
+        62 => "°C",
+        63 => "K",
+        181 => "K/h",
+        182 => "K/min",
+        64 => "°F",
+        65 => "degree days °C",
+        66 => "degree days °F",
+        120 => "Δ°F",
+        121 => "ΔK",
+        
+        // Time
+        67 => "year",
+        68 => "month",
+        69 => "week",
+        70 => "day",
+        71 => "h",
+        72 => "min",
+        73 => "s",
+        158 => "hundredths s",
+        159 => "ms",
+        
+        // Torque
+        160 => "N·m",
+        
+        // Velocity
+        161 => "mm/s",
+        162 => "mm/min",
+        74 => "m/s",
+        163 => "m/min",
+        164 => "m/h",
+        75 => "km/h",
+        76 => "ft/s",
+        77 => "ft/min",
+        78 => "mph",
+        
+        // Volume
+        79 => "ft³",
+        80 => "m³",
+        81 => "imperial gal",
+        197 => "mL",
+        82 => "L",
+        83 => "US gal",
+        
+        // Volumetric Flow
+        142 => "ft³/s",
+        84 => "ft³/min",
+        254 => "million ft³/min",
+        191 => "ft³/h",
+        248 => "ft³/day",
+        47808 => "standard ft³/day",
+        47809 => "million standard ft³/day",
+        47810 => "thousand ft³/day",
+        47811 => "thousand standard ft³/day",
+        47812 => "lb/day",
+        85 => "m³/s",
+        165 => "m³/min",
+        135 => "m³/h",
+        249 => "m³/day",
+        86 => "imperial gal/min",
+        198 => "mL/s",
+        87 => "L/s",
+        88 => "L/min",
+        136 => "L/h",
+        89 => "US gal/min",
+        192 => "US gal/h",
+        
+        // Other
+        90 => "°",
+        91 => "°C/h",
+        92 => "°C/min",
+        93 => "°F/h",
+        94 => "°F/min",
+        183 => "J·s",
+        186 => "kg/m³",
+        137 => "kW·h/m²",
+        138 => "kW·h/ft²",
+        250 => "W·h/m³",
+        251 => "J/m³",
+        139 => "MJ/m²",
+        140 => "MJ/ft²",
+        252 => "mol%",
+        95 => "",
+        187 => "N·s",
+        188 => "N/m",
+        96 => "ppm",
+        97 => "ppb",
+        253 => "Pa·s",
+        98 => "%",
+        143 => "% obscuration/ft",
+        144 => "% obscuration/m",
+        99 => "%/s",
+        100 => "/min",
+        101 => "/s",
+        102 => "psi/°F",
+        103 => "rad",
+        184 => "rad/s",
+        104 => "rpm",
+        185 => "m²/N",
+        189 => "W/m·K",
+        141 => "W/m²·K",
+        207 => "‰",
+        208 => "g/g",
+        209 => "kg/kg",
+        210 => "g/kg",
+        211 => "mg/g",
+        212 => "mg/kg",
+        213 => "g/mL",
+        214 => "g/L",
+        215 => "mg/L",
+        216 => "μg/L",
+        217 => "g/m³",
+        218 => "mg/m³",
+        219 => "μg/m³",
+        220 => "ng/m³",
+        221 => "g/cm³",
+        222 => "Bq",
+        223 => "kBq",
+        224 => "MBq",
+        225 => "Gy",
+        226 => "mGy",
+        227 => "μGy",
+        228 => "Sv",
+        229 => "mSv",
+        230 => "μSv",
+        231 => "μSv/h",
+        47814 => "mrem",
+        47815 => "mrem/h",
+        232 => "dBA",
+        233 => "NTU",
+        234 => "pH",
+        235 => "g/m²",
+        236 => "min/K",
+        
+        _ => return None,
+    };
+    Some(unit_str.to_string())
+}
+
+// Decode any BACnet value to string
+fn decode_any_bacnet_value(data: &[u8]) -> Option<(String, usize)> {
+    if data.is_empty() {
+        return None;
+    }
+    
+    // Use the crate's decoding functions
+    if let Ok((tag, length, tag_consumed)) = decode_application_tag(data) {
+        let total_consumed = tag_consumed + length;
+        
+        match tag {
+            ApplicationTag::Null => Some(("null".to_string(), total_consumed)),
+            ApplicationTag::Boolean => {
+                let value = if length == 0 { "false" } else { "true" };
+                Some((value.to_string(), tag_consumed))
+            }
+            ApplicationTag::UnsignedInt => {
+                if let Ok((value, _)) = decode_unsigned(data) {
+                    Some((value.to_string(), total_consumed))
+                } else {
+                    None
+                }
+            }
+            ApplicationTag::SignedInt => {
+                if let Ok((value, _)) = decode_signed(data) {
+                    Some((value.to_string(), total_consumed))
+                } else {
+                    None
+                }
+            }
+            ApplicationTag::Real => {
+                if let Ok((value, _)) = decode_real(data) {
+                    Some((value.to_string(), total_consumed))
+                } else {
+                    None
+                }
+            }
+            ApplicationTag::CharacterString => {
+                // Use encoding_rs for proper character decoding
+                if data.len() >= tag_consumed + length && length > 0 {
+                    // Check encoding byte
+                    let encoding = data[tag_consumed];
+                    let string_data = &data[tag_consumed + 1..tag_consumed + length];
+                    
+                    // Debug problematic strings
+                    if string_data.len() > 0 && string_data.iter().any(|&b| b > 127) {
+                        let hex_preview: String = string_data.iter().take(20)
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        println!("          DEBUG: String with encoding {} data: {}", encoding, hex_preview);
+                    }
+                    
+                    let decoded = match encoding {
+                        0 => {
+                            // UTF-8
+                            let (cow, _, had_errors) = UTF_8.decode(string_data);
+                            if had_errors {
+                                // Try to extract printable ASCII characters
+                                string_data.iter()
+                                    .filter(|&&b| b >= 32 && b <= 126)
+                                    .map(|&b| b as char)
+                                    .collect()
+                            } else {
+                                cow.into_owned()
+                            }
+                        }
+                        4 | 5 => {
+                            // UTF-16BE (UCS-2 or UTF-16)
+                            let (cow, _, had_errors) = UTF_16BE.decode(string_data);
+                            let result = cow.into_owned();
+                            // Filter out non-printable characters
+                            if had_errors || result.chars().any(|c| c == '\u{fffd}' || (c as u32) > 127 && !c.is_alphabetic()) {
+                                // Try to extract ASCII from UTF-16
+                                let mut clean = String::new();
+                                for chunk in string_data.chunks(2) {
+                                    if chunk.len() == 2 {
+                                        // Try BE
+                                        if chunk[0] == 0 && chunk[1] >= 32 && chunk[1] <= 126 {
+                                            clean.push(chunk[1] as char);
+                                        }
+                                        // Try LE
+                                        else if chunk[1] == 0 && chunk[0] >= 32 && chunk[0] <= 126 {
+                                            clean.push(chunk[0] as char);
+                                        }
+                                    }
+                                }
+                                if !clean.is_empty() {
+                                    clean
+                                } else {
+                                    result
+                                }
+                            } else {
+                                result
+                            }
+                        }
+                        _ => {
+                            // Unknown encoding, try to extract printable ASCII
+                            string_data.iter()
+                                .filter(|&&b| b >= 32 && b <= 126)
+                                .map(|&b| b as char)
+                                .collect()
+                        }
+                    };
+                    
+                    Some((decoded, total_consumed))
+                } else {
+                    None
+                }
+            }
+            ApplicationTag::Enumerated => {
+                if let Ok((value, _)) = decode_enumerated(data) {
+                    Some((value.to_string(), total_consumed))
+                } else {
+                    None
+                }
+            }
+            ApplicationTag::ObjectIdentifier => {
+                // Decode object identifier
+                if data.len() >= tag_consumed + 4 {
+                    let obj_data = &data[tag_consumed..tag_consumed + 4];
+                    let obj_id = u32::from_be_bytes([obj_data[0], obj_data[1], obj_data[2], obj_data[3]]);
+                    let obj_type = (obj_id >> 22) & 0x3FF;
+                    let instance = obj_id & 0x3FFFFF;
+                    Some((format!("{}:{}", obj_type, instance), total_consumed))
+                } else {
+                    None
+                }
+            }
+            _ => {
+                // For other types, return hex representation
+                let hex_str = hex::encode(&data[tag_consumed..tag_consumed + length]);
+                Some((format!("0x{}", hex_str), total_consumed))
+            }
+        }
+    } else {
+        None
+    }
+}
+
+// Keep the old parser for compatibility but simplified
+fn parse_rpm_all_response_old(data: &str) -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
     let mut properties = HashMap::new();
     
     if data.starts_with("0x") {
@@ -840,6 +1561,10 @@ fn parse_rpm_all_response(data: &str) -> Result<HashMap<u32, String>, Box<dyn st
                                 if bytes[i] == 0x29 && i + 1 < bytes.len() {
                                     let prop_id = bytes[i + 1] as u32;
                                     i += 2;
+                                } else if bytes[i] == 0x2A && i + 2 < bytes.len() {
+                                    // Context tag 2 with length 2 - extended property ID
+                                    let prop_id = ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
+                                    i += 3;
                                     
                                     // Skip opening tag 4E if present
                                     if i < bytes.len() && bytes[i] == 0x4E {
@@ -857,6 +1582,7 @@ fn parse_rpm_all_response(data: &str) -> Result<HashMap<u32, String>, Box<dyn st
                                         
                                         // Parse value in this range
                                         if value_end > i {
+                                            // Parse the entire value using decode_bacnet_value
                                             if let Ok(value) = decode_bacnet_value(&bytes[i..value_end]) {
                                                 properties.insert(prop_id, value);
                                             }
@@ -870,11 +1596,21 @@ fn parse_rpm_all_response(data: &str) -> Result<HashMap<u32, String>, Box<dyn st
                                         }
                                     }
                                 } else if bytes[i] == 0x2A && i + 2 < bytes.len() {
-                                    // Context tag 2 with length 1 (0x2A) - list of property IDs at end
-                                    // Skip the entire list
+                                    // Context tag 2 with length 2 (0x2A) - extended property list
+                                    // This contains the count of properties that follow
+                                    let count = bytes[i + 1] as usize;
                                     i += 2;
-                                    while i < bytes.len() && bytes[i] == 0x91 {
-                                        i += 2; // Skip enumerated values
+                                    
+                                    // Skip the property IDs
+                                    while i < bytes.len() && bytes[i] == 0x4E {
+                                        i += 1; // Skip opening tag
+                                        // Skip enumerated property IDs
+                                        if i + 1 < bytes.len() && bytes[i] == 0x91 {
+                                            i += 2; // Skip enumerated value
+                                        }
+                                        if i < bytes.len() && bytes[i] == 0x4F {
+                                            i += 1; // Skip closing tag
+                                        }
                                     }
                                 } else {
                                     i += 1;
@@ -1016,6 +1752,10 @@ fn read_object_property(socket: &UdpSocket, device: &BACnetDevice, object: &BACn
 }
 
 fn send_request_and_get_response(socket: &UdpSocket, device: &BACnetDevice, apdu: &[u8], invoke_id: u8) -> Result<String, Box<dyn std::error::Error>> {
+    send_request_and_get_response_with_timeout(socket, device, apdu, invoke_id, Duration::from_millis(500))
+}
+
+fn send_request_and_get_response_with_timeout(socket: &UdpSocket, device: &BACnetDevice, apdu: &[u8], invoke_id: u8, timeout: Duration) -> Result<String, Box<dyn std::error::Error>> {
     // Create NPDU based on device location
     let npdu = if device.network_number == 0 {
         // Local device
@@ -1272,34 +2012,72 @@ fn display_comprehensive_summary(devices: &HashMap<u32, BACnetDevice>) {
 
                 let type_name = object_type_name(obj.object_type);
 
-                // Skip objects without actual values (as requested)
-                if obj.present_value.is_none() || obj.present_value.as_deref() == Some("N/A") {
-                    continue;
-                }
-                
-                // Skip I/O objects without units (as requested)
-                if is_io_object(obj.object_type) && obj.units.is_none() {
-                    continue;
-                }
-                
-                // Show objects with values (and units for I/O objects)
-                let value_str = obj.present_value.as_deref().unwrap_or("N/A");
-                let units_str = obj.units.as_deref().unwrap_or("");
-                
-                println!("      {:2}. {} {} - {} = {} {}", 
+                // Always show object type, instance and name
+                print!("      {:3}. {} {:>3} - {}", 
                     i + 1, 
                     type_name, 
                     obj.instance, 
-                    obj_name, 
-                    value_str, 
-                    units_str
+                    obj_name
                 );
+                
+                // If there's a present value, add it
+                if let Some(value) = &obj.present_value {
+                    if !value.is_empty() && value != "N/A" && value != "null" {
+                        print!(" = {}", value);
+                        
+                        // If there's also units, add them
+                        if let Some(units) = &obj.units {
+                            if !units.is_empty() && units != "no-units" {
+                                print!(" {}", units);
+                            }
+                        }
+                    }
+                }
+                
+                println!();
             }
         } else {
             println!("   OBJECTS: Unable to read object list");
         }
     }
 
+    // Summary of objects where property ID 8 (ALL) didn't work
+    println!("\n{}", "=".repeat(80));
+    println!("Summary: Objects where property ID 8 (ALL) did not work");
+    println!("{}", "=".repeat(80));
+    
+    let mut total_objects_without_names = 0;
+    for (device_id, device) in devices.iter() {
+        let mut device_objects_without_names = Vec::new();
+        
+        for obj in &device.objects {
+            let type_name = object_type_name(obj.object_type);
+            let default_name = format!("{}_{}", type_name, obj.instance);
+            let has_default_name = obj.name.as_ref().map_or(false, |n| n == &default_name);
+            
+            if has_default_name || obj.name.is_none() {
+                device_objects_without_names.push((obj.object_type, obj.instance));
+                total_objects_without_names += 1;
+            }
+        }
+        
+        if !device_objects_without_names.is_empty() {
+            println!("\nDevice {} - {} ({})", 
+                     device_id, 
+                     device.vendor_name,
+                     if device.network_number == 0 { "Local".to_string() } else { format!("Network {}", device.network_number) });
+            for (obj_type, instance) in device_objects_without_names {
+                println!("   - {} {}", object_type_name(obj_type), instance);
+            }
+        }
+    }
+    
+    if total_objects_without_names == 0 {
+        println!("\nSUCCESS: All objects successfully returned ObjectName using property ID 8 (ALL)");
+    } else {
+        println!("\nWARNING: Total objects where property ID 8 (ALL) did not return ObjectName: {}", total_objects_without_names);
+    }
+    
     println!("\n{}", "=".repeat(80));
     println!("Network scan complete!");
 }
@@ -1600,126 +2378,32 @@ fn decode_bacnet_value(data: &[u8]) -> Result<String, Box<dyn std::error::Error>
     Ok(format!("0x{}", hex::encode(data)))
 }
 
-// Extract ASCII characters from UTF-16 encoded data
-// This function is specifically enhanced to handle BELIMO device string encoding issues:
-// 1. It's more lenient with non-ASCII characters, replacing them with underscores instead of failing
-// 2. It handles mixed encodings that don't strictly follow UTF-16LE or UTF-16BE standards
-// 3. It attempts multiple extraction approaches if standard methods fail
-// 4. It includes special handling for known problematic patterns like ")MN"
-// 5. It's designed to extract as much useful information as possible even from corrupted strings
+// Extract characters from UTF-16 encoded data using encoding_rs
 fn extract_ascii_from_utf16(data: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    use encoding_rs::UTF_16LE;
+    
     if data.len() % 2 != 0 {
         return Err("Invalid UTF-16 data length".into());
     }
 
-    let mut result = String::new();
-    let mut i = 0;
-
-    // Check if data looks like UTF-16LE (null bytes in odd positions)
-    let mut looks_like_le = true;
-    let mut looks_like_be = true;
-
-    // Analyze the pattern - check more bytes for better detection
-    for j in (0..data.len().min(40)).step_by(2) {
-        if j + 1 < data.len() {
-            if data[j + 1] != 0 {
-                looks_like_le = false;
-            }
-            if data[j] != 0 {
-                looks_like_be = false;
-            }
-        }
+    // Try UTF-16BE first (BACnet standard)
+    let (text_be, _, had_errors_be) = UTF_16BE.decode(data);
+    if !had_errors_be && !text_be.trim().is_empty() {
+        return Ok(text_be.into_owned());
     }
-
-    // Special handling for BELIMO devices - they often have mixed encoding
-    // Try to extract as much as possible even with non-ASCII characters
-    if looks_like_le {
-        // UTF-16LE: ASCII chars are in even positions, odd positions are 0
-        while i + 1 < data.len() {
-            let ch = data[i];
-            // Skip null bytes but don't break the loop - continue processing
-            if ch != 0 {
-                // Accept more characters, including some special ones
-                // This helps with BELIMO device names that may contain special characters
-                if (ch >= 32 && ch <= 126) || ch == 0x29 || ch == 0x28 || ch == 0x2D {
-                    result.push(ch as char);
-                } else {
-                    // For non-ASCII, just add a placeholder and continue
-                    // Don't return an error for non-ASCII characters
-                    if result.len() > 0 && !result.ends_with('_') {
-                        result.push('_');
-                    }
-                }
-            }
-            i += 2;
-        }
-    } else if looks_like_be {
-        // UTF-16BE: ASCII chars are in odd positions, even positions are 0
-        while i + 1 < data.len() {
-            let ch = data[i + 1];
-            // Skip null bytes but don't break the loop - continue processing
-            if ch != 0 {
-                // Accept more characters, including some special ones
-                // This helps with BELIMO device names that may contain special characters
-                if (ch >= 32 && ch <= 126) || ch == 0x29 || ch == 0x28 || ch == 0x2D {
-                    result.push(ch as char);
-                } else {
-                    // For non-ASCII, just add a placeholder and continue
-                    // Don't return an error for non-ASCII characters
-                    if result.len() > 0 && !result.ends_with('_') {
-                        result.push('_');
-                    }
-                }
-            }
-            i += 2;
-        }
+    
+    // Try UTF-16LE as fallback
+    let (text_le, _, had_errors_le) = UTF_16LE.decode(data);
+    if !had_errors_le && !text_le.trim().is_empty() {
+        return Ok(text_le.into_owned());
+    }
+    
+    // If both had errors, use the one with better results
+    if text_be.len() > text_le.len() {
+        Ok(text_be.into_owned())
     } else {
-        // Even if it doesn't look like standard UTF-16, try to extract ASCII characters
-        // This is especially helpful for BELIMO devices with mixed encoding
-        let mut le_result = String::new();
-        let mut be_result = String::new();
-
-        // Try LE extraction
-        i = 0;
-        while i + 1 < data.len() {
-            if data[i] >= 32 && data[i] <= 126 {
-                le_result.push(data[i] as char);
-            }
-            i += 2;
-        }
-
-        // Try BE extraction
-        i = 1;
-        while i < data.len() {
-            if data[i] >= 32 && data[i] <= 126 {
-                be_result.push(data[i] as char);
-            }
-            i += 2;
-        }
-
-        // Use the result with more printable characters
-        if le_result.len() > be_result.len() {
-            result = le_result;
-        } else {
-            result = be_result;
-        }
-
-        if result.is_empty() {
-            return Err("Could not extract ASCII characters".into());
-        }
+        Ok(text_le.into_owned())
     }
-
-    // Clean up the result - remove any trailing underscores
-    let cleaned = result.trim_end_matches('_').trim().to_string();
-
-    // Special handling for BELIMO devices - fix known problematic patterns
-    if cleaned == ")MN" || cleaned.contains(")MN") {
-        // This is likely a corrupted string from BELIMO devices
-        // Return a more meaningful name based on context
-        return Ok("BELIMO_Parameter".to_string());
-    }
-
-    Ok(cleaned)
 }
 
 // Check if a string contains only printable ASCII characters
@@ -1728,175 +2412,36 @@ fn is_printable_ascii(s: &str) -> bool {
 }
 
 // Decode UCS-2 or UTF-16 string data using encoding_rs
-// This function handles various character encodings and includes special handling for BELIMO devices
-// BELIMO devices have several issues with string encoding:
-// 1. They sometimes use non-standard character encodings or mixed encodings
-// 2. They often have problematic patterns like ")MN" in object names
-// 3. Some objects have invalid or corrupted encoding in their names
-// This function includes multiple approaches to handle these issues and extract meaningful names
 fn decode_ucs2_or_utf16(data: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
-    use encoding_rs::{UTF_16LE, UTF_16BE, UTF_8};
+    use encoding_rs::UTF_16LE;
 
     if data.is_empty() {
         return Ok("".to_string());
     }
 
-    // Special handling for BELIMO devices - check for known problematic patterns in raw data
-    if data.len() >= 4 {
-        // Check for ")MN" pattern in various encodings
-        if (data.len() == 6 && data[0] == 0x29 && data[2] == 0x4D && data[4] == 0x4E) ||  // ")MN" in UTF-16LE
-            (data.len() == 6 && data[1] == 0x29 && data[3] == 0x4D && data[5] == 0x4E) ||  // ")MN" in UTF-16BE
-            (data.len() == 3 && data[0] == 0x29 && data[1] == 0x4D && data[2] == 0x4E) {   // ")MN" in ASCII
-            return Ok("BELIMO_Parameter".to_string());
-        }
-
-        // Check for specific BELIMO device patterns
-        if data.len() == 4 && data[0] == 0x0C && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x00 {
-            return Ok("Temperature".to_string());
-        }
+    // Try UTF-16BE first (BACnet standard)
+    let (result_be, _, _) = UTF_16BE.decode(data);
+    let cleaned_be = result_be.trim_end_matches('\0').trim();
+    if !cleaned_be.is_empty() && is_printable_ascii(cleaned_be) {
+        return Ok(cleaned_be.to_string());
     }
-
-    // Check if we have an even number of bytes (required for UTF-16)
-    if data.len() % 2 != 0 {
-        // If odd number of bytes, try to interpret as UTF-8 as a fallback
-        let (result, _, had_errors) = UTF_8.decode(data);
-        if !had_errors {
-            let cleaned = result.trim_end_matches('\0').trim().to_string();
-            if !cleaned.is_empty() {
-                // Special handling for BELIMO devices
-                if cleaned == ")MN" || cleaned.contains(")MN") {
-                    return Ok("BELIMO_Parameter".to_string());
-                }
-                return Ok(cleaned);
-            }
-        }
-        // If UTF-8 fails, try treating as single-byte ASCII-like encoding
-        let ascii_result: String = data.iter()
-            .filter(|&&b| b >= 32 && b <= 126) // Only printable ASCII
-            .map(|&b| b as char)
-            .collect();
-        if !ascii_result.is_empty() {
-            // Special handling for BELIMO devices
-            if ascii_result == ")MN" || ascii_result.contains(")MN") {
-                return Ok("BELIMO_Parameter".to_string());
-            }
-            return Ok(ascii_result);
-        }
-        return Ok(format!("(invalid encoding: 0x{})", hex::encode(data)));
+    
+    // Try UTF-16LE as fallback
+    let (result_le, _, _) = UTF_16LE.decode(data);
+    let cleaned_le = result_le.trim_end_matches('\0').trim();
+    if !cleaned_le.is_empty() && is_printable_ascii(cleaned_le) {
+        return Ok(cleaned_le.to_string());
     }
-
-    // First try to extract ASCII from UTF-16 manually (more reliable for BACnet)
-    if let Ok(ascii_result) = extract_ascii_from_utf16(data) {
-        if !ascii_result.is_empty() {
-            // Special handling for BELIMO devices
-            if ascii_result == ")MN" || ascii_result.contains(")MN") {
-                return Ok("BELIMO_Parameter".to_string());
-            }
-            return Ok(ascii_result);
-        }
+    
+    // Try UTF-8 as last resort
+    let (result_utf8, _, _) = UTF_8.decode(data);
+    let cleaned_utf8 = result_utf8.trim_end_matches('\0').trim();
+    if !cleaned_utf8.is_empty() {
+        return Ok(cleaned_utf8.to_string());
     }
-
-    // Try UTF-16LE (little-endian) using encoding_rs
-    let (result, _, had_errors) = UTF_16LE.decode(data);
-    if !had_errors {
-        let cleaned = result.trim_end_matches('\0').trim().to_string();
-        if !cleaned.is_empty() && is_printable_ascii(&cleaned) {
-            // Special handling for BELIMO devices
-            if cleaned == ")MN" || cleaned.contains(")MN") {
-                return Ok("BELIMO_Parameter".to_string());
-            }
-            return Ok(cleaned);
-        }
-    }
-
-    // Try UTF-16BE (big-endian) as a fallback
-    let (result, _, had_errors) = UTF_16BE.decode(data);
-    if !had_errors {
-        let cleaned = result.trim_end_matches('\0').trim().to_string();
-        if !cleaned.is_empty() && is_printable_ascii(&cleaned) {
-            // Special handling for BELIMO devices
-            if cleaned == ")MN" || cleaned.contains(")MN") {
-                return Ok("BELIMO_Parameter".to_string());
-            }
-            return Ok(cleaned);
-        }
-    }
-
-    // Direct ASCII extraction for common BACnet strings
-    // This is a workaround for display issues with UTF-16 strings
-    let mut ascii_string = String::new();
-    let mut i = 0;
-
-    // Check if this looks like UTF-16LE (ASCII chars with zero bytes in between)
-    let mut is_utf16le = true;
-    let mut is_utf16be = true;
-
-    // Check the pattern to determine if it's likely UTF-16LE or UTF-16BE
-    for j in (0..data.len()).step_by(2) {
-        if j + 1 < data.len() {
-            // For UTF-16LE, we expect every other byte to be zero for ASCII text
-            if data[j+1] != 0 {
-                is_utf16le = false;
-            }
-            // For UTF-16BE, we expect every first byte to be zero for ASCII text
-            if data[j] != 0 {
-                is_utf16be = false;
-            }
-        }
-    }
-
-    // If it looks like UTF-16LE, extract ASCII characters only
-    if is_utf16le {
-        while i < data.len() {
-            if i + 1 < data.len() && data[i+1] == 0 {
-                let ch = data[i];
-                if ch >= 32 && ch <= 126 {
-                    ascii_string.push(ch as char);
-                } else if ch != 0 {
-                    // Non-ASCII character, stop processing
-                    break;
-                }
-            }
-            i += 2;
-        }
-    }
-    // If it looks like UTF-16BE, extract ASCII characters only
-    else if is_utf16be {
-        while i < data.len() {
-            if i + 1 < data.len() && data[i] == 0 {
-                let ch = data[i+1];
-                if ch >= 32 && ch <= 126 {
-                    ascii_string.push(ch as char);
-                } else if ch != 0 {
-                    // Non-ASCII character, stop processing
-                    break;
-                }
-            }
-            i += 2;
-        }
-    }
-    // Fallback to scanning for ASCII patterns
-    else {
-        while i < data.len() {
-            if i + 1 < data.len() {
-                if data[i] >= 32 && data[i] <= 126 && data[i+1] == 0 {
-                    // This is an ASCII character in UTF-16LE
-                    ascii_string.push(data[i] as char);
-                } else if data[i] == 0 && data[i+1] >= 32 && data[i+1] <= 126 {
-                    // This is an ASCII character in UTF-16BE
-                    ascii_string.push(data[i+1] as char);
-                }
-            }
-            i += 2;
-        }
-    }
-
-    if !ascii_string.is_empty() {
-        return Ok(ascii_string);
-    }
-
-    // If all decoding methods failed, return an error
-    Err(format!("Failed to decode UTF-16 string").into())
+    
+    // If all else fails, return hex representation
+    Ok(format!("0x{}", hex::encode(data)))
 }
 
 // Convert hex bytes to a more readable string representation
