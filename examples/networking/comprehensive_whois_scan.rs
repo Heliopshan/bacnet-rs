@@ -27,6 +27,7 @@ struct DeviceInfo {
     network_number: u16,
     vendor_name: String,
     mac_address: Vec<u8>,
+    device_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -62,13 +63,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Discover devices
     println!("Discovering devices...");
-    let devices = discover_devices(&socket, &broadcast_addresses)?;
+    let mut devices = discover_devices(&socket, &broadcast_addresses)?;
     println!("Found {} devices\n", devices.len());
 
     // Process each device
-    for device in devices.values() {
+    for device in devices.values_mut() {
+        // Read device name
+        if let Ok(name) = read_and_parse_property(&socket, device, ObjectType::Device, device.instance, PropertyIdentifier::ObjectName as u32) {
+            device.device_name = name;
+        } else {
+            device.device_name = format!("Device {}", device.instance);
+        }
+
         println!("\n========================================");
-        println!("Device {} - {}", device.instance, device.vendor_name);
+        println!("{} - {}", device.device_name, device.vendor_name);
+        println!("Device Instance: {}", device.instance);
         println!("Address: {}", device.address);
         if device.network_number != 0 {
             println!("Network: {}", device.network_number);
@@ -169,10 +178,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     obj.present_value.clone()
                                 };
 
-                                println!("    [{:3}] {:<40} = {}",
+                                println!("    [{:3}] {:<40} = {} ({})",
                                          obj.instance,
                                          obj.name,
-                                         value_display);
+                                         value_display,
+                                         device.device_name);
                             }
                         }
                     }
@@ -283,6 +293,7 @@ fn discover_devices(
                                             vendor_name: get_vendor_name(iam.vendor_identifier as u16)
                                                 .unwrap_or("Unknown").to_string(),
                                             mac_address,
+                                            device_name: String::new(), // Will be populated later
                                         });
                                     }
                                 }

@@ -88,6 +88,36 @@ path = "examples/networking/comprehensive_whois_scan.rs"
 required-features = ["std"]
 
 [[example]]
+name = "network_object_scanner"
+path = "examples/networking/network_object_scanner.rs"
+required-features = ["std", "async"]
+
+[[example]]
+name = "network_object_scanner_simple"
+path = "examples/networking/network_object_scanner_simple.rs"
+required-features = ["std", "async"]
+
+[[example]]
+name = "test_object_names"
+path = "examples/networking/test_object_names.rs"
+required-features = ["std", "async"]
+
+[[example]]
+name = "test_name_only"
+path = "examples/networking/test_name_only.rs"
+required-features = ["std"]
+
+[[example]]
+name = "network_object_scanner_v2"
+path = "examples/networking/network_object_scanner_v2.rs"
+required-features = ["std"]
+
+[[example]]
+name = "test_belimo_value"
+path = "examples/networking/test_belimo_value.rs"
+required-features = ["std"]
+
+[[example]]
 name = "transport_demo"
 path = "examples/networking/transport_demo.rs"
 required-features = ["std"]
