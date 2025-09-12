@@ -50,7 +50,11 @@ use core::fmt;
 extern crate alloc;
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::String, vec::Vec, collections::{BTreeMap, BTreeSet}};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::String,
+    vec::Vec,
+};
 
 #[cfg(feature = "std")]
 use std::collections::{BTreeMap, BTreeSet};
@@ -209,7 +213,7 @@ impl Npdu {
             hop_count: None,
         }
     }
-    
+
     /// Create NPDU for global broadcast (matching YABE/bacnet-stack)
     pub fn global_broadcast() -> Self {
         Self {
@@ -218,7 +222,7 @@ impl Npdu {
                 network_message: false,
                 destination_present: true,
                 source_present: false,
-                expecting_reply: false,  // YABE uses 0x20 (no expecting_reply bit)
+                expecting_reply: false, // YABE uses 0x20 (no expecting_reply bit)
                 priority: 0,
             },
             destination: Some(NetworkAddress {
@@ -251,105 +255,114 @@ impl Npdu {
     /// Encode NPDU to bytes
     pub fn encode(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
-        
+
         // Version
         buffer.push(self.version);
-        
+
         // Control byte
         buffer.push(self.control.to_byte());
-        
+
         // Destination network address
         if let Some(ref dest) = self.destination {
             buffer.extend_from_slice(&dest.network.to_be_bytes());
             buffer.push(dest.address.len() as u8);
             buffer.extend_from_slice(&dest.address);
         }
-        
+
         // Source network address
         if let Some(ref src) = self.source {
             buffer.extend_from_slice(&src.network.to_be_bytes());
             buffer.push(src.address.len() as u8);
             buffer.extend_from_slice(&src.address);
         }
-        
+
         // Hop count (only if destination is present)
         if self.destination.is_some() {
             buffer.push(self.hop_count.unwrap_or(255));
         }
-        
+
         buffer
     }
-    
+
     /// Decode NPDU from bytes
     pub fn decode(data: &[u8]) -> Result<(Self, usize)> {
         if data.len() < 2 {
             return Err(NetworkError::InvalidNpdu("NPDU too short".to_string()));
         }
-        
+
         let mut pos = 0;
-        
+
         // Version
         let version = data[pos];
         pos += 1;
-        
+
         if version != 1 {
-            return Err(NetworkError::InvalidNpdu(
-                format!("Invalid NPDU version: {}", version)
-            ));
+            return Err(NetworkError::InvalidNpdu(format!(
+                "Invalid NPDU version: {}",
+                version
+            )));
         }
-        
+
         // Control byte
         let control = NpduControl::from_byte(data[pos]);
         pos += 1;
-        
+
         // Destination network address
         let destination = if control.destination_present {
             if pos + 3 > data.len() {
-                return Err(NetworkError::InvalidNpdu("Invalid destination address".to_string()));
+                return Err(NetworkError::InvalidNpdu(
+                    "Invalid destination address".to_string(),
+                ));
             }
-            
+
             let network = u16::from_be_bytes([data[pos], data[pos + 1]]);
             pos += 2;
-            
+
             let addr_len = data[pos] as usize;
             pos += 1;
-            
+
             if pos + addr_len > data.len() {
-                return Err(NetworkError::InvalidNpdu("Invalid destination address length".to_string()));
+                return Err(NetworkError::InvalidNpdu(
+                    "Invalid destination address length".to_string(),
+                ));
             }
-            
+
             let address = data[pos..pos + addr_len].to_vec();
             pos += addr_len;
-            
+
             Some(NetworkAddress::new(network, address))
         } else {
             None
         };
-        
+
         // Source network address
         let source = if control.source_present {
             if pos + 3 > data.len() {
-                return Err(NetworkError::InvalidNpdu("Invalid source address".to_string()));
+                return Err(NetworkError::InvalidNpdu(
+                    "Invalid source address".to_string(),
+                ));
             }
-            
+
             let network = u16::from_be_bytes([data[pos], data[pos + 1]]);
             pos += 2;
-            
+
             let addr_len = data[pos] as usize;
             pos += 1;
-            
+
             if pos + addr_len > data.len() {
-                return Err(NetworkError::InvalidNpdu("Invalid source address length".to_string()));
+                return Err(NetworkError::InvalidNpdu(
+                    "Invalid source address length".to_string(),
+                ));
             }
-            
+
             let address = data[pos..pos + addr_len].to_vec();
             pos += addr_len;
-            
+
             Some(NetworkAddress::new(network, address))
         } else {
             None
         };
-        
+
         // Hop count (only if destination is present)
         let hop_count = if destination.is_some() {
             if pos >= data.len() {
@@ -361,7 +374,7 @@ impl Npdu {
         } else {
             None
         };
-        
+
         let npdu = Npdu {
             version,
             control,
@@ -369,7 +382,7 @@ impl Npdu {
             source,
             hop_count,
         };
-        
+
         Ok((npdu, pos))
     }
 }
@@ -393,20 +406,22 @@ impl NetworkLayerMessage {
     pub fn new(message_type: NetworkMessageType, data: Vec<u8>) -> Self {
         Self { message_type, data }
     }
-    
+
     /// Encode network layer message
     pub fn encode(&self) -> Vec<u8> {
         let mut buffer = vec![self.message_type as u8];
         buffer.extend_from_slice(&self.data);
         buffer
     }
-    
+
     /// Decode network layer message
     pub fn decode(data: &[u8]) -> Result<Self> {
         if data.is_empty() {
-            return Err(NetworkError::InvalidNpdu("Empty network message".to_string()));
+            return Err(NetworkError::InvalidNpdu(
+                "Empty network message".to_string(),
+            ));
         }
-        
+
         let message_type = match data[0] {
             0x00 => NetworkMessageType::WhoIsRouterToNetwork,
             0x01 => NetworkMessageType::IAmRouterToNetwork,
@@ -420,17 +435,20 @@ impl NetworkLayerMessage {
             0x09 => NetworkMessageType::DisconnectConnectionToNetwork,
             0x12 => NetworkMessageType::WhatIsNetworkNumber,
             0x13 => NetworkMessageType::NetworkNumberIs,
-            _ => return Err(NetworkError::InvalidNpdu(
-                format!("Unknown network message type: {}", data[0])
-            )),
+            _ => {
+                return Err(NetworkError::InvalidNpdu(format!(
+                    "Unknown network message type: {}",
+                    data[0]
+                )))
+            }
         };
-        
+
         let message_data = if data.len() > 1 {
             data[1..].to_vec()
         } else {
             Vec::new()
         };
-        
+
         Ok(NetworkLayerMessage::new(message_type, message_data))
     }
 }
@@ -445,21 +463,23 @@ pub struct RoutingTable {
 impl RoutingTable {
     /// Create a new routing table
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
-    
+
     /// Add a router entry
     pub fn add_router(&mut self, router: RouterInfo) {
         // Remove existing entry for the same address
         self.entries.retain(|r| r.address != router.address);
         self.entries.push(router);
     }
-    
+
     /// Find route to network
     pub fn find_route(&self, network: u16) -> Option<&RouterInfo> {
         self.entries.iter().find(|r| r.networks.contains(&network))
     }
-    
+
     /// Remove router by address
     pub fn remove_router(&mut self, address: &NetworkAddress) {
         self.entries.retain(|r| &r.address != address);
@@ -548,7 +568,10 @@ impl RouterManager {
     }
 
     /// Process network layer messages
-    pub fn process_network_message(&mut self, message: &NetworkLayerMessage) -> Result<Option<NetworkLayerMessage>> {
+    pub fn process_network_message(
+        &mut self,
+        message: &NetworkLayerMessage,
+    ) -> Result<Option<NetworkLayerMessage>> {
         match message.message_type {
             NetworkMessageType::WhoIsRouterToNetwork => {
                 self.handle_who_is_router_to_network(&message.data)
@@ -562,9 +585,7 @@ impl RouterManager {
             NetworkMessageType::RouterAvailableToNetwork => {
                 self.handle_router_available_to_network(&message.data)
             }
-            NetworkMessageType::WhatIsNetworkNumber => {
-                self.handle_what_is_network_number()
-            }
+            NetworkMessageType::WhatIsNetworkNumber => self.handle_what_is_network_number(),
             _ => Ok(None), // Other messages not handled here
         }
     }
@@ -586,11 +607,14 @@ impl RouterManager {
     }
 
     /// Handle I-Am-Router-To-Network message
-    fn handle_i_am_router_to_network(&mut self, data: &[u8]) -> Result<Option<NetworkLayerMessage>> {
+    fn handle_i_am_router_to_network(
+        &mut self,
+        data: &[u8],
+    ) -> Result<Option<NetworkLayerMessage>> {
         // Parse networks this router can reach
         let mut pos = 0;
         let mut networks = Vec::new();
-        
+
         while pos + 1 < data.len() {
             let network = u16::from_be_bytes([data[pos], data[pos + 1]]);
             networks.push(network);
@@ -599,12 +623,15 @@ impl RouterManager {
 
         // Add router to routing table (would need router address from NPDU source)
         // This is a simplified implementation
-        
+
         Ok(None)
     }
 
     /// Handle Router-Busy-To-Network message
-    fn handle_router_busy_to_network(&mut self, data: &[u8]) -> Result<Option<NetworkLayerMessage>> {
+    fn handle_router_busy_to_network(
+        &mut self,
+        data: &[u8],
+    ) -> Result<Option<NetworkLayerMessage>> {
         if data.len() >= 2 {
             let network = u16::from_be_bytes([data[0], data[1]]);
             if !self.busy_networks.contains(&network) {
@@ -615,7 +642,10 @@ impl RouterManager {
     }
 
     /// Handle Router-Available-To-Network message
-    fn handle_router_available_to_network(&mut self, data: &[u8]) -> Result<Option<NetworkLayerMessage>> {
+    fn handle_router_available_to_network(
+        &mut self,
+        data: &[u8],
+    ) -> Result<Option<NetworkLayerMessage>> {
         if data.len() >= 2 {
             let network = u16::from_be_bytes([data[0], data[1]]);
             self.busy_networks.retain(|&n| n != network);
@@ -633,7 +663,12 @@ impl RouterManager {
     }
 
     /// Add a discovered router
-    pub fn add_discovered_router(&mut self, networks: Vec<u16>, address: NetworkAddress, performance_index: Option<u8>) {
+    pub fn add_discovered_router(
+        &mut self,
+        networks: Vec<u16>,
+        address: NetworkAddress,
+        performance_index: Option<u8>,
+    ) {
         let router = RouterInfo {
             networks,
             address,
@@ -699,7 +734,8 @@ impl PathDiscovery {
     pub fn add_link(&mut self, link: NetworkLink) {
         // Remove existing link between same networks
         self.network_topology.retain(|l| {
-            !(l.source_network == link.source_network && l.destination_network == link.destination_network)
+            !(l.source_network == link.source_network
+                && l.destination_network == link.destination_network)
         });
         self.network_topology.push(link);
         // Clear cache as topology changed
@@ -709,24 +745,27 @@ impl PathDiscovery {
     /// Find optimal path to destination network using Dijkstra's algorithm
     pub fn find_path(&mut self, source: u16, destination: u16) -> Option<Vec<u16>> {
         // Check cache first
-        if let Some((_, path)) = self.path_cache.iter().find(|(dest, _)| *dest == destination) {
+        if let Some((_, path)) = self
+            .path_cache
+            .iter()
+            .find(|(dest, _)| *dest == destination)
+        {
             return Some(path.clone());
         }
 
         // Simple implementation of shortest path finding
         let path = self.dijkstra_shortest_path(source, destination);
-        
+
         // Cache the result
         if let Some(ref p) = path {
             self.path_cache.push((destination, p.clone()));
         }
-        
+
         path
     }
 
     /// Dijkstra's shortest path algorithm (simplified)
     fn dijkstra_shortest_path(&self, source: u16, destination: u16) -> Option<Vec<u16>> {
-
         if source == destination {
             return Some(vec![source]);
         }
@@ -848,7 +887,11 @@ impl NetworkDiagnostics {
 
     /// Update network status
     pub fn update_network_status(&mut self, network: u16, status: NetworkStatus) {
-        if let Some((_, existing_status)) = self.network_status.iter_mut().find(|(net, _)| *net == network) {
+        if let Some((_, existing_status)) = self
+            .network_status
+            .iter_mut()
+            .find(|(net, _)| *net == network)
+        {
             *existing_status = status;
         } else {
             self.network_status.push((network, status));
@@ -857,7 +900,11 @@ impl NetworkDiagnostics {
 
     /// Update router health
     pub fn update_router_health(&mut self, address: NetworkAddress, health: RouterHealth) {
-        if let Some((_, existing_health)) = self.router_health.iter_mut().find(|(addr, _)| *addr == address) {
+        if let Some((_, existing_health)) = self
+            .router_health
+            .iter_mut()
+            .find(|(addr, _)| *addr == address)
+        {
             *existing_health = health;
         } else {
             self.router_health.push((address, health));
@@ -866,7 +913,11 @@ impl NetworkDiagnostics {
 
     /// Record latency measurement
     pub fn record_latency(&mut self, network: u16, latency_ms: u32) {
-        if let Some((_, existing_latency)) = self.latency_measurements.iter_mut().find(|(net, _)| *net == network) {
+        if let Some((_, existing_latency)) = self
+            .latency_measurements
+            .iter_mut()
+            .find(|(net, _)| *net == network)
+        {
             *existing_latency = latency_ms;
         } else {
             self.latency_measurements.push((network, latency_ms));
@@ -902,7 +953,9 @@ impl NetworkDiagnostics {
     pub fn get_unhealthy_networks(&self) -> Vec<u16> {
         self.network_status
             .iter()
-            .filter(|(_, status)| matches!(status, NetworkStatus::Unreachable | NetworkStatus::Degraded))
+            .filter(|(_, status)| {
+                matches!(status, NetworkStatus::Unreachable | NetworkStatus::Degraded)
+            })
             .map(|(network, _)| *network)
             .collect()
     }
@@ -910,13 +963,19 @@ impl NetworkDiagnostics {
     /// Get network health summary
     pub fn get_health_summary(&self) -> NetworkHealthSummary {
         let total_networks = self.network_status.len();
-        let reachable_count = self.network_status.iter()
+        let reachable_count = self
+            .network_status
+            .iter()
             .filter(|(_, status)| matches!(status, NetworkStatus::Reachable))
             .count();
-        let unreachable_count = self.network_status.iter()
+        let unreachable_count = self
+            .network_status
+            .iter()
             .filter(|(_, status)| matches!(status, NetworkStatus::Unreachable))
             .count();
-        let degraded_count = self.network_status.iter()
+        let degraded_count = self
+            .network_status
+            .iter()
             .filter(|(_, status)| matches!(status, NetworkStatus::Degraded))
             .count();
 
@@ -935,7 +994,11 @@ impl NetworkDiagnostics {
             return None;
         }
 
-        let total: u32 = self.latency_measurements.iter().map(|(_, latency)| *latency).sum();
+        let total: u32 = self
+            .latency_measurements
+            .iter()
+            .map(|(_, latency)| *latency)
+            .sum();
         Some(total as f32 / self.latency_measurements.len() as f32)
     }
 }
@@ -968,13 +1031,16 @@ pub struct NetworkLayerHandler {
     pub stats: NetworkStatistics,
 }
 
+type IAmRouterHandler = fn(&NetworkAddress, &[u16]) -> Option<NetworkLayerMessage>;
+type WhoIsRouterHandler = fn(&NetworkAddress, Option<u16>) -> Option<NetworkLayerMessage>;
+
 /// Network message processors
 #[derive(Debug, Default)]
 struct NetworkMessageProcessors {
     /// Process Who-Is-Router-To-Network messages
-    _who_is_router_handler: Option<fn(&NetworkAddress, Option<u16>) -> Option<NetworkLayerMessage>>,
+    _who_is_router_handler: Option<WhoIsRouterHandler>,
     /// Process I-Am-Router-To-Network messages
-    _i_am_router_handler: Option<fn(&NetworkAddress, &[u16]) -> Option<NetworkLayerMessage>>,
+    _i_am_router_handler: Option<IAmRouterHandler>,
 }
 
 impl NetworkLayerHandler {
@@ -989,9 +1055,13 @@ impl NetworkLayerHandler {
     }
 
     /// Process an incoming NPDU
-    pub fn process_npdu(&mut self, npdu: &Npdu, source_address: &NetworkAddress) -> Result<Option<NetworkResponse>> {
+    pub fn process_npdu(
+        &mut self,
+        npdu: &Npdu,
+        source_address: &NetworkAddress,
+    ) -> Result<Option<NetworkResponse>> {
         self.stats.record_received();
-        
+
         if npdu.is_network_message() {
             self.process_network_message(npdu, source_address)
         } else {
@@ -1001,7 +1071,11 @@ impl NetworkLayerHandler {
     }
 
     /// Process a network layer message
-    fn process_network_message(&mut self, _npdu: &Npdu, _source_address: &NetworkAddress) -> Result<Option<NetworkResponse>> {
+    fn process_network_message(
+        &mut self,
+        _npdu: &Npdu,
+        _source_address: &NetworkAddress,
+    ) -> Result<Option<NetworkResponse>> {
         // Network messages have their type in the first byte after the NPDU header
         // This would need to be implemented based on the actual message content
         Ok(None)
@@ -1010,11 +1084,11 @@ impl NetworkLayerHandler {
     /// Send Who-Is-Router-To-Network message
     pub fn who_is_router(&mut self, _network: Option<u16>) -> Npdu {
         self.stats.record_sent();
-        
+
         let mut npdu = Npdu::new();
         npdu.control.network_message = true;
         npdu.control.priority = 3; // Normal priority
-        
+
         // Message content would include the network number if specified
         npdu
     }
@@ -1022,11 +1096,11 @@ impl NetworkLayerHandler {
     /// Send I-Am-Router-To-Network message
     pub fn i_am_router(&mut self, _networks: &[u16]) -> Npdu {
         self.stats.record_sent();
-        
+
         let mut npdu = Npdu::new();
         npdu.control.network_message = true;
         npdu.control.priority = 3;
-        
+
         // Message content would include the list of networks
         npdu
     }
@@ -1034,7 +1108,11 @@ impl NetworkLayerHandler {
     /// Update router information
     pub fn update_router(&mut self, router_info: RouterInfo) {
         // Check if router already exists
-        if let Some(existing) = self.routers.iter_mut().find(|r| r.address == router_info.address) {
+        if let Some(existing) = self
+            .routers
+            .iter_mut()
+            .find(|r| r.address == router_info.address)
+        {
             existing.networks = router_info.networks;
             existing.performance_index = router_info.performance_index;
         } else {
@@ -1334,7 +1412,8 @@ impl NetworkSecurityManager {
                 return false;
             }
 
-            if !self.allowed_networks.is_empty() && !self.allowed_networks.contains(&source.network) {
+            if !self.allowed_networks.is_empty() && !self.allowed_networks.contains(&source.network)
+            {
                 self.security_stats.rejected += 1;
                 return false;
             }
@@ -1405,70 +1484,76 @@ mod tests {
             expecting_reply: false,
             priority: 2,
         };
-        
+
         let byte = control.to_byte();
         let decoded = NpduControl::from_byte(byte);
-        
+
         assert_eq!(control.network_message, decoded.network_message);
         assert_eq!(control.destination_present, decoded.destination_present);
         assert_eq!(control.source_present, decoded.source_present);
         assert_eq!(control.expecting_reply, decoded.expecting_reply);
         assert_eq!(control.priority, decoded.priority);
     }
-    
+
     #[test]
     fn test_npdu_encode_decode_basic() {
         let npdu = Npdu::new();
         let encoded = npdu.encode();
         let (decoded, consumed) = Npdu::decode(&encoded).unwrap();
-        
+
         assert_eq!(decoded.version, 1);
         assert_eq!(consumed, 2); // version + control
         assert_eq!(decoded.destination, None);
         assert_eq!(decoded.source, None);
     }
-    
+
     #[test]
     fn test_npdu_with_destination() {
         let mut npdu = Npdu::new();
         npdu.control.destination_present = true;
         npdu.destination = Some(NetworkAddress::new(100, vec![192, 168, 1, 1]));
         npdu.hop_count = Some(5);
-        
+
         let encoded = npdu.encode();
         let (decoded, _) = Npdu::decode(&encoded).unwrap();
-        
+
         assert_eq!(decoded.destination.as_ref().unwrap().network, 100);
-        assert_eq!(decoded.destination.as_ref().unwrap().address, vec![192, 168, 1, 1]);
+        assert_eq!(
+            decoded.destination.as_ref().unwrap().address,
+            vec![192, 168, 1, 1]
+        );
         assert_eq!(decoded.hop_count, Some(5));
     }
-    
+
     #[test]
     fn test_network_message() {
         let message = NetworkLayerMessage::new(
             NetworkMessageType::WhoIsRouterToNetwork,
             vec![0x00, 0x64], // Network 100
         );
-        
+
         let encoded = message.encode();
         let decoded = NetworkLayerMessage::decode(&encoded).unwrap();
-        
-        assert_eq!(decoded.message_type, NetworkMessageType::WhoIsRouterToNetwork);
+
+        assert_eq!(
+            decoded.message_type,
+            NetworkMessageType::WhoIsRouterToNetwork
+        );
         assert_eq!(decoded.data, vec![0x00, 0x64]);
     }
-    
+
     #[test]
     fn test_routing_table() {
         let mut table = RoutingTable::new();
-        
+
         let router = RouterInfo {
             networks: vec![100, 200],
             address: NetworkAddress::new(0, vec![192, 168, 1, 1]),
             performance_index: Some(10),
         };
-        
+
         table.add_router(router);
-        
+
         assert!(table.find_route(100).is_some());
         assert!(table.find_route(200).is_some());
         assert!(table.find_route(300).is_none());
@@ -1477,12 +1562,12 @@ mod tests {
     #[test]
     fn test_router_manager() {
         let mut manager = RouterManager::new(1);
-        
+
         // Add a router for network 100
         manager.add_discovered_router(
-            vec![100], 
-            NetworkAddress::new(0, vec![192, 168, 1, 1]), 
-            Some(10)
+            vec![100],
+            NetworkAddress::new(0, vec![192, 168, 1, 1]),
+            Some(10),
         );
 
         // Test routing a message to network 100
@@ -1515,12 +1600,12 @@ mod tests {
     #[test]
     fn test_router_manager_network_messages() {
         let mut manager = RouterManager::new(1);
-        
+
         // Add router for network 100
         manager.add_discovered_router(
-            vec![100], 
-            NetworkAddress::new(0, vec![192, 168, 1, 1]), 
-            Some(10)
+            vec![100],
+            NetworkAddress::new(0, vec![192, 168, 1, 1]),
+            Some(10),
         );
 
         // Test Who-Is-Router-To-Network
@@ -1536,10 +1621,7 @@ mod tests {
         }
 
         // Test What-Is-Network-Number
-        let what_is_msg = NetworkLayerMessage::new(
-            NetworkMessageType::WhatIsNetworkNumber,
-            vec![],
-        );
+        let what_is_msg = NetworkLayerMessage::new(NetworkMessageType::WhatIsNetworkNumber, vec![]);
         let response = manager.process_network_message(&what_is_msg).unwrap();
         assert!(response.is_some());
         if let Some(resp) = response {
@@ -1567,7 +1649,7 @@ mod tests {
     #[test]
     fn test_path_discovery() {
         let mut discovery = PathDiscovery::new();
-        
+
         // Create a simple network topology: 1 -> 2 -> 3
         discovery.add_link(NetworkLink {
             source_network: 1,
@@ -1575,7 +1657,7 @@ mod tests {
             cost: 10,
             router_address: NetworkAddress::new(0, vec![192, 168, 1, 1]),
         });
-        
+
         discovery.add_link(NetworkLink {
             source_network: 2,
             destination_network: 3,
@@ -1604,14 +1686,20 @@ mod tests {
     #[test]
     fn test_network_diagnostics() {
         let mut diagnostics = NetworkDiagnostics::new();
-        
+
         // Update network status
         diagnostics.update_network_status(100, NetworkStatus::Reachable);
         diagnostics.update_network_status(200, NetworkStatus::Unreachable);
         diagnostics.update_network_status(300, NetworkStatus::Degraded);
 
-        assert_eq!(diagnostics.get_network_status(100), NetworkStatus::Reachable);
-        assert_eq!(diagnostics.get_network_status(200), NetworkStatus::Unreachable);
+        assert_eq!(
+            diagnostics.get_network_status(100),
+            NetworkStatus::Reachable
+        );
+        assert_eq!(
+            diagnostics.get_network_status(200),
+            NetworkStatus::Unreachable
+        );
         assert_eq!(diagnostics.get_network_status(999), NetworkStatus::Unknown);
 
         // Record latency measurements
@@ -1643,7 +1731,7 @@ mod tests {
     fn test_router_health() {
         let mut diagnostics = NetworkDiagnostics::new();
         let router_addr = NetworkAddress::new(0, vec![192, 168, 1, 1]);
-        
+
         let health = RouterHealth {
             responsive: true,
             #[cfg(feature = "std")]
@@ -1653,7 +1741,7 @@ mod tests {
         };
 
         diagnostics.update_router_health(router_addr.clone(), health);
-        
+
         let retrieved_health = diagnostics.get_router_health(&router_addr);
         assert!(retrieved_health.is_some());
         assert!(retrieved_health.unwrap().responsive);
@@ -1679,12 +1767,12 @@ mod tests {
     #[test]
     fn test_performance_metrics() {
         let mut manager = RouterManager::new(1);
-        
+
         // Add a router
         manager.add_discovered_router(
-            vec![100], 
-            NetworkAddress::new(0, vec![192, 168, 1, 1]), 
-            Some(10)
+            vec![100],
+            NetworkAddress::new(0, vec![192, 168, 1, 1]),
+            Some(10),
         );
 
         // Route some messages to generate metrics

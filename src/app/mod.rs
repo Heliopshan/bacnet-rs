@@ -973,7 +973,7 @@ impl SegmentationManager {
             return Ok(vec![Vec::new()]);
         }
 
-        let segment_count = (data.len() + max_segment_size - 1) / max_segment_size;
+        let segment_count = data.len().div_ceil(max_segment_size);
 
         if segment_count > max_segments as usize {
             return Err(ApplicationError::SegmentationError(
@@ -1137,15 +1137,18 @@ impl Default for SupportedServices {
     }
 }
 
+type PropertyProcessor = Box<dyn Fn(&[u8]) -> Result<Vec<u8>> + Send + Sync>;
+type WhoIsProcessor = Box<dyn Fn(&[u8]) -> Result<Option<Vec<u8>>> + Send + Sync>;
+
 /// Service processors for handling different service types
 #[derive(Default)]
 struct ServiceProcessors {
     /// Read property processor
-    read_property: Option<Box<dyn Fn(&[u8]) -> Result<Vec<u8>> + Send + Sync>>,
+    read_property: Option<PropertyProcessor>,
     /// Write property processor
-    write_property: Option<Box<dyn Fn(&[u8]) -> Result<Vec<u8>> + Send + Sync>>,
+    write_property: Option<PropertyProcessor>,
     /// Who-Is processor
-    who_is: Option<Box<dyn Fn(&[u8]) -> Result<Option<Vec<u8>>> + Send + Sync>>,
+    who_is: Option<WhoIsProcessor>,
 }
 
 impl fmt::Debug for ServiceProcessors {
@@ -1320,18 +1323,15 @@ impl ApplicationLayerHandler {
     ) -> Result<Option<Apdu>> {
         self.stats.unconfirmed_requests += 1;
 
-        match service_choice {
-            UnconfirmedServiceChoice::WhoIs => {
-                if let Some(ref processor) = self.service_processors.who_is {
-                    if let Ok(Some(response_data)) = processor(service_data) {
-                        return Ok(Some(Apdu::UnconfirmedRequest {
-                            service_choice: UnconfirmedServiceChoice::IAm,
-                            service_data: response_data,
-                        }));
-                    }
+        if service_choice == UnconfirmedServiceChoice::WhoIs {
+            if let Some(ref processor) = self.service_processors.who_is {
+                if let Ok(Some(response_data)) = processor(service_data) {
+                    return Ok(Some(Apdu::UnconfirmedRequest {
+                        service_choice: UnconfirmedServiceChoice::IAm,
+                        service_data: response_data,
+                    }));
                 }
             }
-            _ => {}
         }
 
         Ok(None)

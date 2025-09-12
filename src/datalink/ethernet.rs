@@ -69,12 +69,10 @@
 //! ```
 
 #[cfg(feature = "std")]
-use std::{
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec::Vec, string::String};
+use alloc::{string::String, vec::Vec};
 
 use crate::datalink::{DataLink, DataLinkAddress, DataLinkError, DataLinkType, Result};
 
@@ -179,24 +177,24 @@ pub struct EthernetFrame {
     /// - `FF:FF:FF:FF:FF:FF` - Broadcast to all devices
     /// - `01:00:5E:xx:xx:xx` - IPv4 multicast range
     pub dest_mac: [u8; 6],
-    
+
     /// Source MAC address (6 bytes).
     ///
     /// Identifies the sender of the frame. Must be a unicast address
     /// (LSB of first byte must be 0).
     pub src_mac: [u8; 6],
-    
+
     /// Ethernet type field (2 bytes).
     ///
     /// For BACnet frames, this must be 0x82DC. Other values indicate
     /// non-BACnet traffic.
     pub ether_type: u16,
-    
+
     /// LLC header (3 bytes).
     ///
     /// For BACnet frames, this must be [0x82, 0x82, 0x03].
     pub llc_header: [u8; 3],
-    
+
     /// Payload data (NPDU).
     ///
     /// Contains the BACnet NPDU (Network Protocol Data Unit). The maximum
@@ -289,27 +287,27 @@ impl EthernetFrame {
     /// ```
     pub fn encode(&self) -> Vec<u8> {
         let mut frame = Vec::with_capacity(BACNET_ETHERNET_HEADER_SIZE + self.payload.len());
-        
+
         // Destination MAC
         frame.extend_from_slice(&self.dest_mac);
-        
+
         // Source MAC
         frame.extend_from_slice(&self.src_mac);
-        
+
         // Ethernet type
         frame.extend_from_slice(&self.ether_type.to_be_bytes());
-        
+
         // LLC header
         frame.extend_from_slice(&self.llc_header);
-        
+
         // Payload
         frame.extend_from_slice(&self.payload);
-        
+
         // Pad to minimum frame size if necessary
         while frame.len() < MIN_ETHERNET_FRAME_SIZE {
             frame.push(0);
         }
-        
+
         frame
     }
 
@@ -372,28 +370,28 @@ impl EthernetFrame {
         // Extract fields
         let mut dest_mac = [0u8; 6];
         dest_mac.copy_from_slice(&data[0..6]);
-        
+
         let mut src_mac = [0u8; 6];
         src_mac.copy_from_slice(&data[6..12]);
-        
+
         let ether_type = u16::from_be_bytes([data[12], data[13]]);
-        
+
         // Verify this is a BACnet frame
         if ether_type != BACNET_ETHERNET_TYPE {
             return Err(DataLinkError::InvalidFrame);
         }
-        
+
         let mut llc_header = [0u8; 3];
         llc_header.copy_from_slice(&data[14..17]);
-        
+
         // Verify LLC header
         if llc_header != BACNET_LLC_HEADER {
             return Err(DataLinkError::InvalidFrame);
         }
-        
+
         // Extract payload (strip any padding)
         let payload = data[17..].to_vec();
-        
+
         Ok(Self {
             dest_mac,
             src_mac,
@@ -505,18 +503,18 @@ impl EthernetFrame {
 pub struct EthernetDataLink {
     /// Local MAC address of this device.
     local_mac: [u8; 6],
-    
+
     /// Network interface name.
     ///
     /// Examples: "eth0", "en0", "Ethernet"
     _interface: String,
-    
+
     /// Receive buffer for incoming frames.
     ///
     /// In a real implementation, this would be populated by a packet
     /// capture thread or event-driven I/O.
     rx_buffer: Arc<Mutex<Vec<(EthernetFrame, DataLinkAddress)>>>,
-    
+
     /// Running state flag.
     ///
     /// Used to control the receive thread in a real implementation.
@@ -571,12 +569,12 @@ impl EthernetDataLink {
     pub fn new(interface: &str, local_mac: [u8; 6]) -> Result<Self> {
         let rx_buffer = Arc::new(Mutex::new(Vec::new()));
         let running = Arc::new(Mutex::new(true));
-        
+
         // In a real implementation, we would:
         // 1. Open a raw socket or pcap handle for the interface
         // 2. Set up BPF filters for BACnet frames
         // 3. Start a receive thread
-        
+
         Ok(Self {
             local_mac,
             _interface: interface.to_string(),
@@ -605,18 +603,21 @@ impl EthernetDataLink {
         // In a real implementation, this would:
         // 1. Encode the frame
         // 2. Send it via raw socket or pcap
-        
+
         let encoded = frame.encode();
-        
+
         // Validate frame size
         if encoded.len() > MAX_ETHERNET_FRAME_SIZE {
             return Err(DataLinkError::InvalidFrame);
         }
-        
+
         // Simulate sending (in real implementation, use raw socket)
-        println!("Sending Ethernet frame: {} bytes to {:02X?}", 
-            encoded.len(), frame.dest_mac);
-        
+        println!(
+            "Sending Ethernet frame: {} bytes to {:02X?}",
+            encoded.len(),
+            frame.dest_mac
+        );
+
         Ok(())
     }
 
@@ -642,9 +643,13 @@ impl DataLink for EthernetDataLink {
         let dest_mac = match dest {
             DataLinkAddress::Ethernet(mac) => *mac,
             DataLinkAddress::Broadcast => ETHERNET_BROADCAST_MAC,
-            _ => return Err(DataLinkError::AddressError("Invalid address type for Ethernet".into())),
+            _ => {
+                return Err(DataLinkError::AddressError(
+                    "Invalid address type for Ethernet".into(),
+                ))
+            }
         };
-        
+
         let eth_frame = EthernetFrame::new(dest_mac, self.local_mac, frame.to_vec());
         self.send_ethernet_frame(&eth_frame)
     }
@@ -652,7 +657,7 @@ impl DataLink for EthernetDataLink {
     fn receive_frame(&mut self) -> Result<(Vec<u8>, DataLinkAddress)> {
         // Check receive buffer
         let mut buffer = self.rx_buffer.lock().unwrap();
-        
+
         if let Some((frame, source)) = buffer.pop() {
             Ok((frame.payload, source))
         } else {
@@ -712,15 +717,17 @@ impl DataLink for EthernetDataLink {
 pub fn parse_mac_address(mac_str: &str) -> Result<[u8; 6]> {
     let parts: Vec<&str> = mac_str.split(':').collect();
     if parts.len() != 6 {
-        return Err(DataLinkError::AddressError("Invalid MAC address format".into()));
+        return Err(DataLinkError::AddressError(
+            "Invalid MAC address format".into(),
+        ));
     }
-    
+
     let mut mac = [0u8; 6];
     for (i, part) in parts.iter().enumerate() {
         mac[i] = u8::from_str_radix(part, 16)
             .map_err(|_| DataLinkError::AddressError("Invalid MAC address hex".into()))?;
     }
-    
+
     Ok(mac)
 }
 
@@ -749,8 +756,10 @@ pub fn parse_mac_address(mac_str: &str) -> Result<[u8; 6]> {
 /// assert_eq!(format_mac_address(&broadcast), "FF:FF:FF:FF:FF:FF");
 /// ```
 pub fn format_mac_address(mac: &[u8; 6]) -> String {
-    format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5])
+    format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
 }
 
 /// Validate a BACnet/Ethernet frame.
@@ -796,23 +805,23 @@ pub fn validate_ethernet_frame(data: &[u8]) -> Result<()> {
     if data.len() < BACNET_ETHERNET_HEADER_SIZE {
         return Err(DataLinkError::InvalidFrame);
     }
-    
+
     // Check maximum size
     if data.len() > MAX_ETHERNET_FRAME_SIZE {
         return Err(DataLinkError::InvalidFrame);
     }
-    
+
     // Check Ethernet type
     let ether_type = u16::from_be_bytes([data[12], data[13]]);
     if ether_type != BACNET_ETHERNET_TYPE {
         return Err(DataLinkError::InvalidFrame);
     }
-    
+
     // Check LLC header
-    if data.len() >= 17 && &data[14..17] != BACNET_LLC_HEADER {
+    if data.len() >= 17 && data[14..17] != BACNET_LLC_HEADER {
         return Err(DataLinkError::InvalidFrame);
     }
-    
+
     Ok(())
 }
 
@@ -825,20 +834,20 @@ mod tests {
         let dest_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
         let src_mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
         let npdu = vec![0x01, 0x02, 0x03, 0x04];
-        
+
         let frame = EthernetFrame::new(dest_mac, src_mac, npdu.clone());
         let encoded = frame.encode();
-        
+
         // Check minimum size with padding
         assert!(encoded.len() >= MIN_ETHERNET_FRAME_SIZE);
-        
+
         // Decode and verify
         let decoded = EthernetFrame::decode(&encoded).unwrap();
         assert_eq!(decoded.dest_mac, dest_mac);
         assert_eq!(decoded.src_mac, src_mac);
         assert_eq!(decoded.ether_type, BACNET_ETHERNET_TYPE);
         assert_eq!(decoded.llc_header, BACNET_LLC_HEADER);
-        
+
         // Payload might have padding, so check prefix
         assert!(decoded.payload.starts_with(&npdu));
     }
@@ -847,7 +856,7 @@ mod tests {
     fn test_broadcast_frame() {
         let src_mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
         let npdu = vec![0x01, 0x02, 0x03, 0x04];
-        
+
         let frame = EthernetFrame::broadcast(src_mac, npdu);
         assert_eq!(frame.dest_mac, ETHERNET_BROADCAST_MAC);
         assert!(frame.is_broadcast());
@@ -859,10 +868,10 @@ mod tests {
         let mac_str = "00:11:22:33:44:55";
         let mac = parse_mac_address(mac_str).unwrap();
         assert_eq!(mac, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        
+
         let formatted = format_mac_address(&mac);
         assert_eq!(formatted, "00:11:22:33:44:55");
-        
+
         // Test invalid format
         assert!(parse_mac_address("invalid").is_err());
         assert!(parse_mac_address("00:11:22:33:44").is_err());
@@ -874,16 +883,16 @@ mod tests {
         let dest_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
         let src_mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
         let npdu = vec![0x01, 0x02, 0x03, 0x04];
-        
+
         let frame = EthernetFrame::new(dest_mac, src_mac, npdu);
         let encoded = frame.encode();
-        
+
         assert!(validate_ethernet_frame(&encoded).is_ok());
-        
+
         // Test invalid frames
         assert!(validate_ethernet_frame(&[]).is_err()); // Too short
         assert!(validate_ethernet_frame(&encoded[..16]).is_err()); // Missing LLC
-        
+
         // Test wrong Ethernet type
         let mut bad_frame = encoded.clone();
         bad_frame[12] = 0x08;
@@ -896,18 +905,22 @@ mod tests {
     fn test_ethernet_datalink() {
         let local_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
         let mut datalink = EthernetDataLink::new("eth0", local_mac).unwrap();
-        
+
         assert_eq!(datalink.link_type(), DataLinkType::Ethernet);
-        assert_eq!(datalink.local_address(), DataLinkAddress::Ethernet(local_mac));
-        
+        assert_eq!(
+            datalink.local_address(),
+            DataLinkAddress::Ethernet(local_mac)
+        );
+
         // Test sending
         let dest_mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
         let npdu = vec![0x01, 0x02, 0x03, 0x04];
         let result = datalink.send_frame(&npdu, &DataLinkAddress::Ethernet(dest_mac));
         assert!(result.is_ok());
-        
+
         // Test broadcast
         let result = datalink.send_frame(&npdu, &DataLinkAddress::Broadcast);
         assert!(result.is_ok());
     }
 }
+

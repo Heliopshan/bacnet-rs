@@ -5,8 +5,8 @@
 //! and AtomicWriteFile services.
 
 use crate::object::{
-    BacnetObject, ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue, 
-    ObjectError, Result,
+    BacnetObject, ObjectError, ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue,
+    Result,
 };
 
 #[cfg(not(feature = "std"))]
@@ -87,11 +87,11 @@ impl File {
     pub fn read_data(&self, start_position: u32, requested_count: u32) -> Result<Vec<u8>> {
         let start = start_position as usize;
         let end = (start_position + requested_count) as usize;
-        
+
         if start >= self.file_data.len() {
             return Ok(Vec::new()); // EOF
         }
-        
+
         let actual_end = end.min(self.file_data.len());
         Ok(self.file_data[start..actual_end].to_vec())
     }
@@ -122,25 +122,25 @@ impl File {
     pub fn read_records(&self, start_record: u32, record_count: u32) -> Result<Vec<Vec<u8>>> {
         if self.file_access_method != FileAccessMethod::RecordAccess {
             return Err(ObjectError::InvalidValue(
-                "File is not configured for record access".to_string()
+                "File is not configured for record access".to_string(),
             ));
         }
 
         // This is a simplified implementation
         // In practice, records would have defined structure and separators
         let mut records = Vec::new();
-        
+
         // For demonstration, treat each line as a record
         let file_str = String::from_utf8_lossy(&self.file_data);
         let lines: Vec<&str> = file_str.lines().collect();
-        
+
         let start_idx = start_record as usize;
         let end_idx = (start_record + record_count) as usize;
-        
-        for i in start_idx..end_idx.min(lines.len()) {
-            records.push(lines[i].as_bytes().to_vec());
+
+        for line in lines.iter().take(end_idx.min(lines.len())).skip(start_idx) {
+            records.push(line.as_bytes().to_vec());
         }
-        
+
         Ok(records)
     }
 
@@ -152,7 +152,7 @@ impl File {
 
         if self.file_access_method != FileAccessMethod::RecordAccess {
             return Err(ObjectError::InvalidValue(
-                "File is not configured for record access".to_string()
+                "File is not configured for record access".to_string(),
             ));
         }
 
@@ -160,26 +160,26 @@ impl File {
         // Convert current data to lines
         let file_str = String::from_utf8_lossy(&self.file_data);
         let mut lines: Vec<String> = file_str.lines().map(|s| s.to_string()).collect();
-        
+
         let start_idx = start_record as usize;
-        
+
         // Extend lines vector if necessary
         while lines.len() < start_idx + records.len() {
             lines.push(String::new());
         }
-        
+
         // Replace records
         for (i, record) in records.iter().enumerate() {
             let record_str = String::from_utf8_lossy(record);
             lines[start_idx + i] = record_str.to_string();
         }
-        
+
         // Convert back to file data
         let new_data = lines.join("\n");
         self.file_data = new_data.into_bytes();
         self.file_size = self.file_data.len() as u32;
         self.record_count = Some(lines.len() as u32);
-        
+
         Ok(())
     }
 }
@@ -200,9 +200,7 @@ impl BacnetObject for File {
             PropertyIdentifier::ObjectType => {
                 Ok(PropertyValue::Enumerated(ObjectType::File as u32))
             }
-            PropertyIdentifier::Archive => {
-                Ok(PropertyValue::Boolean(self.archive))
-            }
+            PropertyIdentifier::Archive => Ok(PropertyValue::Boolean(self.archive)),
             _ => Err(ObjectError::UnknownProperty),
         }
     }
@@ -261,8 +259,12 @@ mod tests {
 
     #[test]
     fn test_file_data_operations() {
-        let mut file = File::new(1, "test.dat".to_string(), "application/octet-stream".to_string());
-        
+        let mut file = File::new(
+            1,
+            "test.dat".to_string(),
+            "application/octet-stream".to_string(),
+        );
+
         // Set initial data
         let data = b"Hello, BACnet File!".to_vec();
         file.set_file_data(data.clone());
@@ -286,11 +288,11 @@ mod tests {
     fn test_file_record_operations() {
         let mut file = File::new(1, "records.txt".to_string(), "text/plain".to_string());
         file.file_access_method = FileAccessMethod::RecordAccess;
-        
+
         // Set initial records as line-separated data
         let initial_data = "Line 1\nLine 2\nLine 3\nLine 4".as_bytes().to_vec();
         file.set_file_data(initial_data);
-        
+
         // Read records
         let records = file.read_records(1, 2).unwrap();
         assert_eq!(records.len(), 2);
@@ -298,12 +300,9 @@ mod tests {
         assert_eq!(records[1], b"Line 3");
 
         // Write records
-        let new_records = vec![
-            b"New Line 2".to_vec(),
-            b"New Line 3".to_vec(),
-        ];
+        let new_records = vec![b"New Line 2".to_vec(), b"New Line 3".to_vec()];
         file.write_records(1, &new_records).unwrap();
-        
+
         let updated_records = file.read_records(0, 4).unwrap();
         assert_eq!(updated_records[0], b"Line 1");
         assert_eq!(updated_records[1], b"New Line 2");
@@ -314,7 +313,7 @@ mod tests {
     #[test]
     fn test_file_properties() {
         let mut file = File::new(1, "test.txt".to_string(), "text/plain".to_string());
-        
+
         // Test property access
         let name = file.get_property(PropertyIdentifier::ObjectName).unwrap();
         if let PropertyValue::CharacterString(n) = name {
@@ -324,10 +323,8 @@ mod tests {
         }
 
         // Test property modification
-        file.set_property(
-            PropertyIdentifier::Archive,
-            PropertyValue::Boolean(true),
-        ).unwrap();
+        file.set_property(PropertyIdentifier::Archive, PropertyValue::Boolean(true))
+            .unwrap();
         assert_eq!(file.archive, true);
     }
 
@@ -335,13 +332,14 @@ mod tests {
     fn test_read_only_protection() {
         let mut file = File::new(1, "readonly.txt".to_string(), "text/plain".to_string());
         file.read_only = true;
-        
+
         // Should fail to write data
         assert!(file.write_data(0, b"test").is_err());
-        
+
         // Should fail to write records
         file.file_access_method = FileAccessMethod::RecordAccess;
         let records = vec![b"test".to_vec()];
         assert!(file.write_records(0, &records).is_err());
     }
 }
+

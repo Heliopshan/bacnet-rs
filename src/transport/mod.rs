@@ -37,10 +37,10 @@ use std::error::Error;
 
 #[cfg(feature = "std")]
 use std::{
+    collections::HashMap,
     fmt,
     net::{IpAddr, SocketAddr},
     time::Instant,
-    collections::HashMap,
 };
 
 #[cfg(not(feature = "std"))]
@@ -49,10 +49,10 @@ use core::fmt;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
-#[cfg(feature = "std")]
-use std::time::Duration;
 #[cfg(not(feature = "std"))]
 use core::time::Duration;
+#[cfg(feature = "std")]
+use std::time::Duration;
 
 /// Result type for transport operations
 #[cfg(feature = "std")]
@@ -198,7 +198,12 @@ pub trait Transport: Send + Sync {
     fn receive_timeout(&mut self, timeout: Duration) -> Result<(Vec<u8>, SocketAddr)>;
 
     /// Send confirmed request with timeout tracking
-    fn send_confirmed_request(&mut self, dest: SocketAddr, data: &[u8], timeout: Option<Duration>) -> Result<u8>;
+    fn send_confirmed_request(
+        &mut self,
+        dest: SocketAddr,
+        data: &[u8],
+        timeout: Option<Duration>,
+    ) -> Result<u8>;
 
     /// Check for timed out requests
     fn check_timeouts(&mut self) -> Vec<u8>;
@@ -241,7 +246,9 @@ pub struct BacnetIpConfig {
 impl Default for BacnetIpConfig {
     fn default() -> Self {
         Self {
-            bind_address: "0.0.0.0:47808".parse().expect("hardcoded address should be valid"),
+            bind_address: "0.0.0.0:47808"
+                .parse()
+                .expect("hardcoded address should be valid"),
             broadcast_enabled: true,
             foreign_device: None,
             bdt: Vec::new(),
@@ -257,7 +264,7 @@ impl Default for BacnetIpConfig {
 /// BACnet/IP specific constants
 pub mod constants {
     use super::Duration;
-    
+
     /// Default BACnet/IP UDP port
     pub const BACNET_IP_PORT: u16 = 0xBAC0; // 47808
 
@@ -269,19 +276,19 @@ pub mod constants {
 
     /// Default foreign device TTL (seconds)
     pub const DEFAULT_FD_TTL: u16 = 900; // 15 minutes
-    
+
     /// Default request timeout
     pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-    
+
     /// Default socket read timeout
     pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
-    
+
     /// Default socket write timeout
     pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-    
+
     /// Default foreign device registration timeout
     pub const DEFAULT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
-    
+
     /// Maximum number of concurrent requests
     pub const MAX_CONCURRENT_REQUESTS: usize = 255;
 }
@@ -374,7 +381,7 @@ impl BvllMessage {
     /// Decode BVLL message from bytes
     pub fn decode(data: &[u8]) -> Result<Self> {
         let header = BvllHeader::decode(data)?;
-        
+
         if data.len() < header.length as usize {
             return Err(TransportError::InvalidBvll("Message too short".into()));
         }
@@ -425,9 +432,9 @@ impl TimeoutManager {
 
     /// Complete a request
     pub fn complete_request(&mut self, invoke_id: u8) -> Option<Duration> {
-        self.timeouts.remove(&invoke_id).map(|(start_time, _)| {
-            start_time.elapsed()
-        })
+        self.timeouts
+            .remove(&invoke_id)
+            .map(|(start_time, _)| start_time.elapsed())
     }
 
     /// Check for timed out requests
@@ -502,7 +509,7 @@ impl BacnetIpTransport {
     /// Create a new BACnet/IP transport
     pub fn new(config: BacnetIpConfig) -> Result<Self> {
         let socket = UdpSocket::bind(config.bind_address)?;
-        
+
         // Enable broadcast if configured
         if config.broadcast_enabled {
             socket.set_broadcast(true)?;
@@ -525,9 +532,12 @@ impl BacnetIpTransport {
 
     /// Create with default configuration
     pub fn new_default(bind_addr: &str) -> Result<Self> {
-        let mut config = BacnetIpConfig::default();
-        config.bind_address = bind_addr.parse()
-            .map_err(|_| TransportError::InvalidConfiguration("Invalid bind address".into()))?;
+        let config = BacnetIpConfig {
+            bind_address: bind_addr
+                .parse()
+                .map_err(|_| TransportError::InvalidConfiguration("Invalid bind address".into()))?,
+            ..Default::default()
+        };
         Self::new(config)
     }
 
@@ -562,12 +572,12 @@ impl BacnetIpTransport {
         // Temporarily set socket timeout
         let original_timeout = self.socket.read_timeout()?;
         self.socket.set_read_timeout(Some(timeout))?;
-        
+
         let result = self.receive_bvll();
-        
+
         // Restore original timeout
         self.socket.set_read_timeout(original_timeout)?;
-        
+
         result
     }
 
@@ -575,7 +585,7 @@ impl BacnetIpTransport {
     pub fn register_foreign_device(&mut self, bbmd_addr: SocketAddr, ttl: u16) -> Result<()> {
         let mut data = Vec::new();
         data.extend_from_slice(&ttl.to_be_bytes());
-        
+
         let message = BvllMessage::new(BvllFunction::RegisterForeignDevice, data);
         self.send_bvll(message, bbmd_addr)?;
 
@@ -602,7 +612,7 @@ impl BacnetIpTransport {
                 }
             }
         }
-        
+
         // Timeout - assume success for compatibility
         self.config.foreign_device = Some(ForeignDeviceRegistration {
             bbmd_address: bbmd_addr,
@@ -635,10 +645,10 @@ impl BacnetIpTransport {
         // Validate new configuration
         if config.bind_address != self.config.bind_address {
             return Err(TransportError::InvalidConfiguration(
-                "Cannot change bind address on existing transport".into()
+                "Cannot change bind address on existing transport".into(),
             ));
         }
-        
+
         // Update socket timeouts if they changed
         if config.read_timeout != self.config.read_timeout {
             self.socket.set_read_timeout(config.read_timeout)?;
@@ -646,13 +656,18 @@ impl BacnetIpTransport {
         if config.write_timeout != self.config.write_timeout {
             self.socket.set_write_timeout(config.write_timeout)?;
         }
-        
+
         self.config = config;
         Ok(())
     }
 
     /// Send confirmed request with timeout tracking
-    pub fn send_confirmed_request(&mut self, dest: SocketAddr, data: &[u8], timeout: Option<Duration>) -> Result<u8> {
+    pub fn send_confirmed_request(
+        &mut self,
+        dest: SocketAddr,
+        data: &[u8],
+        timeout: Option<Duration>,
+    ) -> Result<u8> {
         let invoke_id = self.next_invoke_id;
         self.next_invoke_id = self.next_invoke_id.wrapping_add(1);
         if self.next_invoke_id == 0 {
@@ -660,7 +675,8 @@ impl BacnetIpTransport {
         }
 
         let request_timeout = timeout.unwrap_or(self.config.request_timeout);
-        self.active_requests.insert(invoke_id, (Instant::now(), request_timeout));
+        self.active_requests
+            .insert(invoke_id, (Instant::now(), request_timeout));
 
         // Send the request
         self.send_npdu_unicast(data, dest)?;
@@ -673,23 +689,24 @@ impl BacnetIpTransport {
         let mut timed_out = Vec::new();
         let now = Instant::now();
 
-        self.active_requests.retain(|&invoke_id, (start_time, timeout)| {
-            if now.duration_since(*start_time) > *timeout {
-                timed_out.push(invoke_id);
-                false // Remove from active requests
-            } else {
-                true // Keep in active requests
-            }
-        });
+        self.active_requests
+            .retain(|&invoke_id, (start_time, timeout)| {
+                if now.duration_since(*start_time) > *timeout {
+                    timed_out.push(invoke_id);
+                    false // Remove from active requests
+                } else {
+                    true // Keep in active requests
+                }
+            });
 
         timed_out
     }
 
     /// Complete a request (remove from timeout tracking)
     pub fn complete_request(&mut self, invoke_id: u8) -> Option<Duration> {
-        self.active_requests.remove(&invoke_id).map(|(start_time, _)| {
-            start_time.elapsed()
-        })
+        self.active_requests
+            .remove(&invoke_id)
+            .map(|(start_time, _)| start_time.elapsed())
     }
 
     /// Get active request count
@@ -700,18 +717,19 @@ impl BacnetIpTransport {
     /// Get requests by remaining time
     pub fn get_requests_by_remaining_time(&self) -> Vec<(u8, Duration)> {
         let now = Instant::now();
-        let mut requests: Vec<(u8, Duration)> = self.active_requests
+        let mut requests: Vec<(u8, Duration)> = self
+            .active_requests
             .iter()
-            .filter_map(|(&invoke_id, (start_time, timeout))| {
+            .map(|(&invoke_id, (start_time, timeout))| {
                 let elapsed = now.duration_since(*start_time);
                 if elapsed < *timeout {
-                    Some((invoke_id, *timeout - elapsed))
+                    (invoke_id, *timeout - elapsed)
                 } else {
-                    Some((invoke_id, Duration::from_secs(0)))
+                    (invoke_id, Duration::from_secs(0))
                 }
             })
             .collect();
-        
+
         // Sort by remaining time (shortest first)
         requests.sort_by_key(|(_, remaining)| *remaining);
         requests
@@ -734,7 +752,12 @@ impl Transport for BacnetIpTransport {
         Ok((message.data, src))
     }
 
-    fn send_confirmed_request(&mut self, dest: SocketAddr, data: &[u8], timeout: Option<Duration>) -> Result<u8> {
+    fn send_confirmed_request(
+        &mut self,
+        dest: SocketAddr,
+        data: &[u8],
+        timeout: Option<Duration>,
+    ) -> Result<u8> {
         self.send_confirmed_request(dest, data, timeout)
     }
 
@@ -763,12 +786,17 @@ pub struct BroadcastManager {
 }
 
 #[cfg(feature = "std")]
+impl Default for BroadcastManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "std")]
 impl BroadcastManager {
     /// Create new broadcast manager
     pub fn new() -> Self {
-        Self {
-            bdt: Vec::new(),
-        }
+        Self { bdt: Vec::new() }
     }
 
     /// Add BDT entry
@@ -789,13 +817,13 @@ impl BroadcastManager {
     /// Encode BDT for transmission
     pub fn encode_bdt(&self) -> Vec<u8> {
         let mut data = Vec::new();
-        
+
         for entry in &self.bdt {
             match entry.address {
                 IpAddr::V4(addr) => {
                     data.extend_from_slice(&addr.octets());
                     data.extend_from_slice(&entry.port.to_be_bytes());
-                    
+
                     if let IpAddr::V4(mask) = entry.mask {
                         data.extend_from_slice(&mask.octets());
                     } else {
@@ -808,25 +836,27 @@ impl BroadcastManager {
                 }
             }
         }
-        
+
         data
     }
 
     /// Decode BDT from received data
     pub fn decode_bdt(&mut self, data: &[u8]) -> Result<()> {
         self.bdt.clear();
-        
+
         let entry_size = 10; // 4 bytes IP + 2 bytes port + 4 bytes mask
         if data.len() % entry_size != 0 {
-            return Err(TransportError::InvalidBvll("Invalid BDT data length".into()));
+            return Err(TransportError::InvalidBvll(
+                "Invalid BDT data length".into(),
+            ));
         }
 
         for chunk in data.chunks_exact(entry_size) {
             let ip_bytes = [chunk[0], chunk[1], chunk[2], chunk[3]];
             let address = IpAddr::V4(ip_bytes.into());
-            
+
             let port = u16::from_be_bytes([chunk[4], chunk[5]]);
-            
+
             let mask_bytes = [chunk[6], chunk[7], chunk[8], chunk[9]];
             let mask = IpAddr::V4(mask_bytes.into());
 
@@ -880,7 +910,7 @@ impl Default for TimeoutConfig {
 #[cfg(feature = "std")]
 pub mod timeout_utils {
     use super::*;
-    
+
     /// Wait for a condition with timeout
     pub fn wait_for_condition<F>(
         condition: F,
@@ -891,18 +921,20 @@ pub mod timeout_utils {
         F: Fn() -> bool,
     {
         let start = Instant::now();
-        
+
         while start.elapsed() < timeout {
             if condition() {
                 return Ok(());
             }
-            
+
             std::thread::sleep(check_interval);
         }
-        
-        Err(TransportError::Timeout("Condition not met within timeout".into()))
+
+        Err(TransportError::Timeout(
+            "Condition not met within timeout".into(),
+        ))
     }
-    
+
     /// Execute operation with retry and exponential backoff
     pub fn retry_with_backoff<F, T, E>(
         mut operation: F,
@@ -915,7 +947,7 @@ pub mod timeout_utils {
         F: FnMut() -> std::result::Result<T, E>,
     {
         let mut delay = initial_delay;
-        
+
         let mut last_error = None;
         for attempt in 0..max_attempts {
             match operation() {
@@ -925,28 +957,27 @@ pub mod timeout_utils {
                     if attempt < max_attempts - 1 {
                         std::thread::sleep(delay);
                         delay = std::cmp::min(
-                            Duration::from_millis((delay.as_millis() as f64 * backoff_multiplier) as u64),
+                            Duration::from_millis(
+                                (delay.as_millis() as f64 * backoff_multiplier) as u64,
+                            ),
                             max_delay,
                         );
                     }
                 }
             }
         }
-        
+
         Err(last_error.expect("retry loop should have at least one error"))
     }
-    
+
     /// Create timeout-aware operation
-    pub fn with_timeout<F, T>(
-        operation: F,
-        timeout: Duration,
-    ) -> Result<T>
+    pub fn with_timeout<F, T>(operation: F, timeout: Duration) -> Result<T>
     where
         F: FnOnce() -> Result<T>,
     {
         let start = Instant::now();
         let result = operation();
-        
+
         if start.elapsed() > timeout {
             Err(TransportError::Timeout(format!(
                 "Operation took {:.2}s, timeout was {:.2}s",
@@ -957,7 +988,7 @@ pub mod timeout_utils {
             result
         }
     }
-    
+
     /// Calculate adaptive timeout based on historical performance
     pub fn calculate_adaptive_timeout(
         recent_times: &[Duration],
@@ -967,47 +998,48 @@ pub mod timeout_utils {
         if recent_times.is_empty() {
             return base_timeout;
         }
-        
+
         // Calculate average and standard deviation
         let avg = recent_times.iter().sum::<Duration>() / recent_times.len() as u32;
-        
+
         let variance: f64 = recent_times
             .iter()
             .map(|t| {
                 let diff = t.as_secs_f64() - avg.as_secs_f64();
                 diff * diff
             })
-            .sum::<f64>() / recent_times.len() as f64;
-        
+            .sum::<f64>()
+            / recent_times.len() as f64;
+
         let std_dev = variance.sqrt();
-        
+
         // Use average + (safety_factor * std_dev), but at least base_timeout
         let adaptive_secs = avg.as_secs_f64() + (safety_factor * std_dev);
         let adaptive_timeout = Duration::from_secs_f64(adaptive_secs);
-        
+
         std::cmp::max(adaptive_timeout, base_timeout)
     }
 }
 
 /// BACnet/SC (Secure Connect) Support Planning
-/// 
+///
 /// BACnet/SC is defined in ASHRAE 135-2020 and provides secure WebSocket-based
 /// communication for BACnet. This would be a future enhancement to the transport layer.
-/// 
+///
 /// Key BACnet/SC Features to Implement:
-/// 
+///
 /// 1. **WebSocket Transport**: TLS-secured WebSocket connections (wss://)
 /// 2. **Node Authentication**: X.509 certificates and certificate authorities
 /// 3. **Hub and Direct Connect**: Support for hub-based and direct node connections
 /// 4. **Message Encryption**: All messages encrypted using TLS
 /// 5. **Connection Management**: Automatic reconnection and connection state tracking
 /// 6. **Discovery**: Integration with DNS-SD for automatic node discovery
-/// 
+///
 /// Implementation Plan:
-/// 
+///
 /// ```rust
 /// // Future BACnet/SC structures (not implemented yet)
-/// 
+///
 /// #[cfg(feature = "bacnet-sc")]
 /// pub struct BacnetScConfig {
 ///     pub certificate_path: PathBuf,
@@ -1017,14 +1049,14 @@ pub mod timeout_utils {
 ///     pub node_uuid: String,
 ///     pub max_connections: usize,
 /// }
-/// 
+///
 /// #[cfg(feature = "bacnet-sc")]
 /// pub struct BacnetScTransport {
 ///     config: BacnetScConfig,
 ///     connections: HashMap<String, WebSocketConnection>,
 ///     hub_connection: Option<WebSocketConnection>,
 /// }
-/// 
+///
 /// #[cfg(feature = "bacnet-sc")]
 /// pub enum BacnetScMessage {
 ///     Advertisement(NodeAdvertisement),
@@ -1034,56 +1066,59 @@ pub mod timeout_utils {
 ///     Heartbeat,
 /// }
 /// ```
-/// 
+///
 /// Dependencies needed for BACnet/SC:
 /// - tokio-tungstenite (WebSocket client/server)
 /// - rustls (TLS implementation)
 /// - webpki (Certificate validation)
 /// - serde_json (JSON message serialization)
 /// - uuid (Node identification)
-/// 
+///
 /// Security Considerations:
 /// - Certificate validation and revocation checking
 /// - Secure random number generation
 /// - Protection against replay attacks
 /// - Rate limiting and DoS protection
-/// 
+///
 /// This would require a separate feature flag and significant additional dependencies,
 /// so it's planned for a future major version.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_bvll_header_encode_decode() {
         let header = BvllHeader::new(BvllFunction::OriginalUnicastNpdu, 100);
         let encoded = header.encode();
-        
+
         assert_eq!(encoded[0], 0x81); // BACnet/IP
         assert_eq!(encoded[1], 0x0A); // Original-Unicast-NPDU
         assert_eq!(encoded[2], 0x00); // Length high byte
         assert_eq!(encoded[3], 0x64); // Length low byte (100)
-        
+
         let decoded = BvllHeader::decode(&encoded).unwrap();
         assert_eq!(decoded.bvll_type as u8, header.bvll_type as u8);
         assert_eq!(decoded.function as u8, header.function as u8);
         assert_eq!(decoded.length, header.length);
     }
-    
+
     #[test]
     fn test_bvll_message_encode_decode() {
         let test_data = vec![0x01, 0x02, 0x03, 0x04];
         let message = BvllMessage::new(BvllFunction::OriginalBroadcastNpdu, test_data.clone());
-        
+
         let encoded = message.encode();
         assert_eq!(encoded.len(), 4 + test_data.len()); // Header + data
-        
+
         let decoded = BvllMessage::decode(&encoded).unwrap();
-        assert_eq!(decoded.header.function as u8, BvllFunction::OriginalBroadcastNpdu as u8);
+        assert_eq!(
+            decoded.header.function as u8,
+            BvllFunction::OriginalBroadcastNpdu as u8
+        );
         assert_eq!(decoded.data, test_data);
     }
-    
+
     #[test]
     fn test_bvll_function_decode() {
         // Test all BVLL function codes
@@ -1093,39 +1128,39 @@ mod tests {
             (0x0B, BvllFunction::OriginalBroadcastNpdu),
             (0x05, BvllFunction::RegisterForeignDevice),
         ];
-        
+
         for (code, expected) in test_cases.iter() {
             let data = [0x81, *code, 0x00, 0x04];
             let header = BvllHeader::decode(&data).unwrap();
             assert_eq!(header.function as u8, *expected as u8);
         }
     }
-    
+
     #[test]
     fn test_broadcast_manager() {
         let mut manager = BroadcastManager::new();
-        
+
         let entry = BdtEntry {
             address: "192.168.1.1".parse().unwrap(),
             port: 47808,
             mask: "255.255.255.0".parse().unwrap(),
         };
-        
+
         manager.add_bdt_entry(entry.clone());
         assert_eq!(manager.get_bdt_entries().len(), 1);
-        
+
         let encoded = manager.encode_bdt();
         assert_eq!(encoded.len(), 10); // 4 + 2 + 4 bytes per entry
-        
+
         let mut new_manager = BroadcastManager::new();
         new_manager.decode_bdt(&encoded).unwrap();
-        
+
         let decoded_entries = new_manager.get_bdt_entries();
         assert_eq!(decoded_entries.len(), 1);
         assert_eq!(decoded_entries[0].address, entry.address);
         assert_eq!(decoded_entries[0].port, entry.port);
     }
-    
+
     #[cfg(feature = "std")]
     #[test]
     fn test_bacnet_ip_config_default() {
@@ -1137,50 +1172,57 @@ mod tests {
         assert_eq!(config.read_timeout, Some(constants::DEFAULT_READ_TIMEOUT));
         assert_eq!(config.write_timeout, Some(constants::DEFAULT_WRITE_TIMEOUT));
         assert_eq!(config.request_timeout, constants::DEFAULT_REQUEST_TIMEOUT);
-        assert_eq!(config.registration_timeout, constants::DEFAULT_REGISTRATION_TIMEOUT);
+        assert_eq!(
+            config.registration_timeout,
+            constants::DEFAULT_REGISTRATION_TIMEOUT
+        );
     }
-    
+
     #[test]
     fn test_invalid_bvll_decode() {
         // Test too short header
         let short_data = [0x81, 0x0A];
         assert!(BvllHeader::decode(&short_data).is_err());
-        
+
         // Test invalid BVLL type
         let invalid_type = [0x82, 0x0A, 0x00, 0x04];
         assert!(BvllHeader::decode(&invalid_type).is_err());
-        
+
         // Test invalid function code
         let invalid_function = [0x81, 0xFF, 0x00, 0x04];
         assert!(BvllHeader::decode(&invalid_function).is_err());
     }
-    
+
     #[cfg(feature = "std")]
     #[test]
     fn test_timeout_tracking() {
         let config = BacnetIpConfig::default();
         let mut transport = BacnetIpTransport::new(config).unwrap();
-        
+
         // Test invoke ID generation
         let target = "127.0.0.1:47808".parse().unwrap();
         let data = &[0x01, 0x02, 0x03];
-        
-        let invoke_id1 = transport.send_confirmed_request(target, data, None).unwrap();
-        let invoke_id2 = transport.send_confirmed_request(target, data, None).unwrap();
-        
+
+        let invoke_id1 = transport
+            .send_confirmed_request(target, data, None)
+            .unwrap();
+        let invoke_id2 = transport
+            .send_confirmed_request(target, data, None)
+            .unwrap();
+
         assert_ne!(invoke_id1, invoke_id2);
         assert_eq!(transport.active_request_count(), 2);
-        
+
         // Test request completion
         let elapsed = transport.complete_request(invoke_id1);
         assert!(elapsed.is_some());
         assert_eq!(transport.active_request_count(), 1);
-        
+
         // Test completing non-existent request
         let elapsed = transport.complete_request(255);
         assert!(elapsed.is_none());
     }
-    
+
     #[test]
     fn test_timeout_constants() {
         assert_eq!(constants::DEFAULT_REQUEST_TIMEOUT.as_secs(), 10);
