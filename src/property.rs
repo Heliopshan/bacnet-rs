@@ -42,7 +42,13 @@ impl PropertyValue {
     pub fn as_display_string(&self) -> String {
         match self {
             PropertyValue::Real(f) => format!("{:.2}", f),
-            PropertyValue::Boolean(b) => if *b { "True".to_string() } else { "False".to_string() },
+            PropertyValue::Boolean(b) => {
+                if *b {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
             PropertyValue::Unsigned(u) => u.to_string(),
             PropertyValue::Signed(i) => i.to_string(),
             PropertyValue::CharacterString(s) => s.clone(),
@@ -61,7 +67,10 @@ impl PropertyValue {
 
     /// Check if this is a numeric value
     pub fn is_numeric(&self) -> bool {
-        matches!(self, PropertyValue::Real(_) | PropertyValue::Unsigned(_) | PropertyValue::Signed(_))
+        matches!(
+            self,
+            PropertyValue::Real(_) | PropertyValue::Unsigned(_) | PropertyValue::Signed(_)
+        )
     }
 
     /// Get numeric value as f64 if possible
@@ -107,10 +116,10 @@ pub fn decode_character_string(data: &[u8]) -> Option<(PropertyValue, usize)> {
     if pos >= data.len() {
         return None;
     }
-    
+
     let _encoding = data[pos];
     pos += 1;
-    
+
     if data.len() < pos + length - 1 {
         return None;
     }
@@ -134,7 +143,7 @@ pub fn decode_real(data: &[u8]) -> Option<(PropertyValue, usize)> {
 
     let bytes = [data[1], data[2], data[3], data[4]];
     let value = f32::from_be_bytes(bytes);
-    
+
     Some((PropertyValue::Real(value), 5))
 }
 
@@ -199,7 +208,11 @@ pub fn decode_signed(data: &[u8]) -> Option<(PropertyValue, usize)> {
         return None;
     }
 
-    let mut value = if (data[1] & 0x80) != 0 { 0xFFFFFFFFu32 } else { 0 }; // Sign extend
+    let mut value = if (data[1] & 0x80) != 0 {
+        0xFFFFFFFFu32
+    } else {
+        0
+    }; // Sign extend
     for i in 0..length {
         value = (value << 8) | (data[1 + i] as u32);
     }
@@ -254,7 +267,10 @@ pub fn decode_object_identifier(data: &[u8]) -> Option<(PropertyValue, usize)> {
 }
 
 /// Extract present value based on object type
-pub fn decode_present_value(data: &[u8], object_type: ObjectType) -> Option<(PropertyValue, usize)> {
+pub fn decode_present_value(
+    data: &[u8],
+    object_type: ObjectType,
+) -> Option<(PropertyValue, usize)> {
     if data.is_empty() {
         return None;
     }
@@ -266,9 +282,9 @@ pub fn decode_present_value(data: &[u8], object_type: ObjectType) -> Option<(Pro
         ObjectType::BinaryInput | ObjectType::BinaryOutput | ObjectType::BinaryValue => {
             decode_boolean(data)
         }
-        ObjectType::MultiStateInput | ObjectType::MultiStateOutput | ObjectType::MultiStateValue => {
-            decode_unsigned(data)
-        }
+        ObjectType::MultiStateInput
+        | ObjectType::MultiStateOutput
+        | ObjectType::MultiStateValue => decode_unsigned(data),
         _ => None,
     }
 }
@@ -286,13 +302,13 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             5 => "millisiemens",
             6 => "siemens",
             7 => "mole-percent",
-            
+
             // Area units
             8 => "square-meters",
             9 => "square-centimeters",
             10 => "square-feet",
             11 => "square-inches",
-            
+
             // Currency units
             12 => "currency1",
             13 => "currency2",
@@ -304,7 +320,7 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             19 => "currency8",
             20 => "currency9",
             21 => "currency10",
-            
+
             // Electrical units
             22 => "milliamperes",
             23 => "amperes",
@@ -335,7 +351,7 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             48 => "volts-per-degree-kelvin",
             49 => "volts-per-meter",
             50 => "webers",
-            
+
             // Energy units
             51 => "btus",
             52 => "kilo-btus",
@@ -348,14 +364,14 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             59 => "megacalories",
             60 => "gigacalories",
             61 => "joules",
-            
+
             // Temperature units
             62 => "degrees-celsius",
             63 => "degrees-fahrenheit",
             64 => "degrees-kelvin",
             65 => "degrees-rankine",
             66 => "delta-degrees-fahrenheit",
-            
+
             // Pressure units
             67 => "pascals",
             68 => "kilopascals",
@@ -368,7 +384,7 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             75 => "millimeters-of-mercury",
             76 => "centimeters-of-mercury",
             77 => "inches-of-mercury",
-            
+
             // Time units
             78 => "years",
             79 => "months",
@@ -379,7 +395,7 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             84 => "seconds",
             85 => "hundredths-seconds",
             86 => "milliseconds",
-            
+
             // Volume units
             87 => "cubic-feet",
             88 => "cubic-meters",
@@ -387,7 +403,7 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             90 => "milliliters",
             91 => "liters",
             92 => "us-gallons",
-            
+
             // Volumetric Flow units
             93 => "cubic-feet-per-second",
             94 => "cubic-feet-per-minute",
@@ -410,7 +426,7 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             111 => "liters-per-hour",
             112 => "us-gallons-per-minute",
             113 => "us-gallons-per-hour",
-            
+
             // Power units
             114 => "watts",
             115 => "kilowatts",
@@ -419,13 +435,13 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             118 => "kilo-btus-per-hour",
             119 => "horsepower",
             120 => "tons-refrigeration",
-            
+
             // Mass units
             121 => "grams",
             122 => "kilograms",
             123 => "pounds-mass",
             124 => "tons",
-            
+
             // Mass Flow units
             125 => "grams-per-second",
             126 => "grams-per-minute",
@@ -436,14 +452,14 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             131 => "pounds-mass-per-hour",
             132 => "pounds-mass-per-second",
             133 => "tons-per-hour",
-            
+
             // Length units
             134 => "millimeters",
             135 => "centimeters",
             136 => "meters",
             137 => "inches",
             138 => "feet",
-            
+
             // Light units
             139 => "candelas",
             140 => "candelas-per-square-meter",
@@ -452,20 +468,20 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             143 => "lumens",
             144 => "luxes",
             145 => "foot-candles",
-            
+
             // Velocity units
             146 => "meters-per-second",
             147 => "kilometers-per-hour",
             148 => "feet-per-second",
             149 => "feet-per-minute",
             150 => "miles-per-hour",
-            
+
             // Acceleration units
             151 => "meters-per-second-per-second",
-            
+
             // Force units
             152 => "newtons",
-            
+
             // Frequency units
             153 => "cycles-per-hour",
             154 => "cycles-per-minute",
@@ -473,11 +489,11 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             156 => "kilohertz",
             157 => "megahertz",
             158 => "per-hour",
-            
+
             // Humidity units
             159 => "grams-of-water-per-kilogram-dry-air",
             160 => "percent-relative-humidity",
-            
+
             // Enthalpy units
             161 => "btus-per-pound",
             162 => "btus-per-pound-dry-air",
@@ -486,37 +502,37 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             165 => "kilojoules-per-kilogram",
             166 => "kilojoules-per-kilogram-dry-air",
             167 => "megajoules-per-kilogram-dry-air",
-            
+
             // Entropy units
             168 => "joules-per-degree-kelvin",
             169 => "joules-per-kilogram-degree-kelvin",
             170 => "kilojoules-per-degree-kelvin",
             171 => "megajoules-per-degree-kelvin",
-            
+
             // Specific Heat units
             172 => "joules-per-kilogram-degree-kelvin",
-            
+
             // Specific Volume units
             173 => "cubic-meters-per-kilogram",
             174 => "cubic-feet-per-pound",
-            
+
             // Thermal Conductivity units
             175 => "watts-per-meter-degree-kelvin",
-            
-            // Thermal Resistance units  
+
+            // Thermal Resistance units
             176 => "square-meter-degree-kelvin-per-watt",
-            
+
             // Thermal Capacity units
             177 => "joules-per-degree-kelvin",
-            
+
             // Energy Density units
             178 => "joules-per-cubic-meter",
             179 => "watt-hours-per-cubic-meter",
             180 => "btus-per-cubic-foot",
-            
+
             // Power Density units
             181 => "watts-per-cubic-meter",
-            
+
             // Additional common HVAC units
             182 => "cfm-per-square-foot",
             183 => "liters-per-second-per-square-meter",
@@ -527,7 +543,7 @@ pub fn decode_units(data: &[u8]) -> Option<(String, usize)> {
             188 => "btus-per-hour-square-foot",
             189 => "btus-per-hour-square-foot-degree-fahrenheit",
             190 => "degrees-fahrenheit-hour-square-feet-per-btu",
-            
+
             _ => "unknown-units",
         };
         Some((units_name.to_string(), consumed))
@@ -749,8 +765,7 @@ pub fn decode_bit_string(data: &[u8]) -> Option<(PropertyValue, usize)> {
     let unused_bits = data[2];
     let mut bits = Vec::new();
 
-    for i in 3..2 + length {
-        let byte = data[i];
+    for byte in data.iter().take(2 + length).skip(3) {
         for bit_pos in (0..8).rev() {
             bits.push((byte & (1 << bit_pos)) != 0);
         }
@@ -887,7 +902,10 @@ mod tests {
         assert_eq!(PropertyValue::Real(23.45).as_display_string(), "23.45");
         assert_eq!(PropertyValue::Boolean(true).as_display_string(), "True");
         assert_eq!(PropertyValue::Unsigned(42).as_display_string(), "42");
-        assert_eq!(PropertyValue::CharacterString("Test".to_string()).as_display_string(), "Test");
+        assert_eq!(
+            PropertyValue::CharacterString("Test".to_string()).as_display_string(),
+            "Test"
+        );
     }
 
     #[test]
@@ -927,3 +945,4 @@ mod tests {
         assert_eq!(get_unit_id("nonexistent-unit"), None);
     }
 }
+

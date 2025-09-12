@@ -4,8 +4,8 @@
 //! object types as defined in ASHRAE 135. These objects represent multi-position values.
 
 use crate::object::{
-    BacnetObject, ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue, 
-    ObjectError, Result, EventState, Reliability,
+    BacnetObject, EventState, ObjectError, ObjectIdentifier, ObjectType, PropertyIdentifier,
+    PropertyValue, Reliability, Result,
 };
 
 #[cfg(not(feature = "std"))]
@@ -124,9 +124,10 @@ impl MultiStateInput {
     /// Set the present value (validates range)
     pub fn set_present_value(&mut self, value: u32) -> Result<()> {
         if value < 1 || value > self.number_of_states {
-            return Err(ObjectError::InvalidValue(
-                format!("Value must be between 1 and {}", self.number_of_states)
-            ));
+            return Err(ObjectError::InvalidValue(format!(
+                "Value must be between 1 and {}",
+                self.number_of_states
+            )));
         }
         self.present_value = value;
         Ok(())
@@ -144,9 +145,10 @@ impl MultiStateInput {
     /// Set state text for a specific state
     pub fn set_state_text(&mut self, state: u32, text: String) -> Result<()> {
         if state < 1 || state > self.number_of_states {
-            return Err(ObjectError::InvalidValue(
-                format!("State must be between 1 and {}", self.number_of_states)
-            ));
+            return Err(ObjectError::InvalidValue(format!(
+                "State must be between 1 and {}",
+                self.number_of_states
+            )));
         }
         self.state_text[(state - 1) as usize] = text;
         Ok(())
@@ -180,15 +182,18 @@ impl MultiStateOutput {
 
     /// Write to priority array at specified priority level (1-16)
     pub fn write_priority(&mut self, priority: u8, value: Option<u32>) -> Result<()> {
-        if priority < 1 || priority > 16 {
-            return Err(ObjectError::InvalidValue("Priority must be 1-16".to_string()));
+        if !(1..=16).contains(&priority) {
+            return Err(ObjectError::InvalidValue(
+                "Priority must be 1-16".to_string(),
+            ));
         }
 
         if let Some(val) = value {
             if val < 1 || val > self.number_of_states {
-                return Err(ObjectError::InvalidValue(
-                    format!("Value must be between 1 and {}", self.number_of_states)
-                ));
+                return Err(ObjectError::InvalidValue(format!(
+                    "Value must be between 1 and {}",
+                    self.number_of_states
+                )));
             }
         }
 
@@ -200,11 +205,9 @@ impl MultiStateOutput {
     /// Update present value based on priority array
     fn update_present_value(&mut self) {
         // Find highest priority non-null value
-        for priority_value in &self.priority_array {
-            if let Some(value) = priority_value {
-                self.present_value = *value;
-                return;
-            }
+        if let Some(value) = self.priority_array.iter().flatten().next() {
+            self.present_value = *value;
+            return;
         }
         // If all priorities are null, use relinquish default
         self.present_value = self.relinquish_default;
@@ -247,15 +250,18 @@ impl MultiStateValue {
 
     /// Write to priority array at specified priority level (1-16)
     pub fn write_priority(&mut self, priority: u8, value: Option<u32>) -> Result<()> {
-        if priority < 1 || priority > 16 {
-            return Err(ObjectError::InvalidValue("Priority must be 1-16".to_string()));
+        if !(1..=16).contains(&priority) {
+            return Err(ObjectError::InvalidValue(
+                "Priority must be 1-16".to_string(),
+            ));
         }
 
         if let Some(val) = value {
             if val < 1 || val > self.number_of_states {
-                return Err(ObjectError::InvalidValue(
-                    format!("Value must be between 1 and {}", self.number_of_states)
-                ));
+                return Err(ObjectError::InvalidValue(format!(
+                    "Value must be between 1 and {}",
+                    self.number_of_states
+                )));
             }
         }
 
@@ -267,11 +273,9 @@ impl MultiStateValue {
     /// Update present value based on priority array
     fn update_present_value(&mut self) {
         // Find highest priority non-null value
-        for priority_value in &self.priority_array {
-            if let Some(value) = priority_value {
-                self.present_value = *value;
-                return;
-            }
+        if let Some(value) = self.priority_array.iter().flatten().next() {
+            self.present_value = *value;
+            return;
         }
         // If all priorities are null, use relinquish default
         self.present_value = self.relinquish_default;
@@ -291,15 +295,13 @@ impl BacnetObject for MultiStateInput {
             PropertyIdentifier::ObjectName => {
                 Ok(PropertyValue::CharacterString(self.object_name.clone()))
             }
-            PropertyIdentifier::ObjectType => {
-                Ok(PropertyValue::Enumerated(ObjectType::MultiStateInput as u32))
-            }
+            PropertyIdentifier::ObjectType => Ok(PropertyValue::Enumerated(
+                ObjectType::MultiStateInput as u32,
+            )),
             PropertyIdentifier::PresentValue => {
                 Ok(PropertyValue::UnsignedInteger(self.present_value))
             }
-            PropertyIdentifier::OutOfService => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
-            }
+            PropertyIdentifier::OutOfService => Ok(PropertyValue::Boolean(self.out_of_service)),
             _ => Err(ObjectError::UnknownProperty),
         }
     }
@@ -357,17 +359,16 @@ impl BacnetObject for MultiStateOutput {
             PropertyIdentifier::ObjectName => {
                 Ok(PropertyValue::CharacterString(self.object_name.clone()))
             }
-            PropertyIdentifier::ObjectType => {
-                Ok(PropertyValue::Enumerated(ObjectType::MultiStateOutput as u32))
-            }
+            PropertyIdentifier::ObjectType => Ok(PropertyValue::Enumerated(
+                ObjectType::MultiStateOutput as u32,
+            )),
             PropertyIdentifier::PresentValue => {
                 Ok(PropertyValue::UnsignedInteger(self.present_value))
             }
-            PropertyIdentifier::OutOfService => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
-            }
+            PropertyIdentifier::OutOfService => Ok(PropertyValue::Boolean(self.out_of_service)),
             PropertyIdentifier::PriorityArray => {
-                let array: Vec<PropertyValue> = self.priority_array
+                let array: Vec<PropertyValue> = self
+                    .priority_array
                     .iter()
                     .map(|&v| match v {
                         Some(val) => PropertyValue::UnsignedInteger(val),
@@ -413,8 +414,8 @@ impl BacnetObject for MultiStateOutput {
     fn is_property_writable(&self, property: PropertyIdentifier) -> bool {
         matches!(
             property,
-            PropertyIdentifier::ObjectName 
-                | PropertyIdentifier::PresentValue 
+            PropertyIdentifier::ObjectName
+                | PropertyIdentifier::PresentValue
                 | PropertyIdentifier::OutOfService
         )
     }
@@ -444,17 +445,16 @@ impl BacnetObject for MultiStateValue {
             PropertyIdentifier::ObjectName => {
                 Ok(PropertyValue::CharacterString(self.object_name.clone()))
             }
-            PropertyIdentifier::ObjectType => {
-                Ok(PropertyValue::Enumerated(ObjectType::MultiStateValue as u32))
-            }
+            PropertyIdentifier::ObjectType => Ok(PropertyValue::Enumerated(
+                ObjectType::MultiStateValue as u32,
+            )),
             PropertyIdentifier::PresentValue => {
                 Ok(PropertyValue::UnsignedInteger(self.present_value))
             }
-            PropertyIdentifier::OutOfService => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
-            }
+            PropertyIdentifier::OutOfService => Ok(PropertyValue::Boolean(self.out_of_service)),
             PropertyIdentifier::PriorityArray => {
-                let array: Vec<PropertyValue> = self.priority_array
+                let array: Vec<PropertyValue> = self
+                    .priority_array
                     .iter()
                     .map(|&v| match v {
                         Some(val) => PropertyValue::UnsignedInteger(val),
@@ -500,8 +500,8 @@ impl BacnetObject for MultiStateValue {
     fn is_property_writable(&self, property: PropertyIdentifier) -> bool {
         matches!(
             property,
-            PropertyIdentifier::ObjectName 
-                | PropertyIdentifier::PresentValue 
+            PropertyIdentifier::ObjectName
+                | PropertyIdentifier::PresentValue
                 | PropertyIdentifier::OutOfService
         )
     }
@@ -535,17 +535,17 @@ mod tests {
     #[test]
     fn test_multistate_state_text() {
         let mut msi = MultiStateInput::new(1, "Mode".to_string(), 3);
-        
+
         // Set custom state text
         msi.set_state_text(1, "OFF".to_string()).unwrap();
         msi.set_state_text(2, "AUTO".to_string()).unwrap();
         msi.set_state_text(3, "MANUAL".to_string()).unwrap();
-        
+
         assert_eq!(msi.get_state_text(), Some("OFF"));
-        
+
         msi.set_present_value(2).unwrap();
         assert_eq!(msi.get_state_text(), Some("AUTO"));
-        
+
         // Test invalid state
         assert!(msi.set_present_value(4).is_err());
     }
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn test_multistate_output_priority() {
         let mut mso = MultiStateOutput::new(1, "Sequence Control".to_string(), 4);
-        
+
         // Write to priority 8
         mso.write_priority(8, Some(3)).unwrap();
         assert_eq!(mso.present_value, 3);
@@ -575,7 +575,7 @@ mod tests {
     #[test]
     fn test_multistate_properties() {
         let mut msv = MultiStateValue::new(1, "Operating Mode".to_string(), 4);
-        
+
         // Test property access
         let name = msv.get_property(PropertyIdentifier::ObjectName).unwrap();
         if let PropertyValue::CharacterString(n) = name {
@@ -588,7 +588,9 @@ mod tests {
         msv.set_property(
             PropertyIdentifier::PresentValue,
             PropertyValue::UnsignedInteger(3),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(msv.present_value, 3);
     }
 }
+

@@ -95,12 +95,13 @@ pub fn validate_bacnet_ip_frame(data: &[u8]) -> ValidationResult {
 
     // Check BVLC function
     let valid_functions = [
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
     ];
     if !valid_functions.contains(&data[1]) {
         result.is_valid = false;
-        result.errors.push(ValidationError::InvalidFrameType { value: data[1] });
+        result
+            .errors
+            .push(ValidationError::InvalidFrameType { value: data[1] });
     }
 
     // Check BVLC length
@@ -176,7 +177,10 @@ pub fn validate_ethernet_frame(data: &[u8]) -> ValidationResult {
     if ether_type != 0x82DC {
         result.is_valid = false;
         result.errors.push(ValidationError::InvalidHeader {
-            reason: format!("Invalid Ethernet type: 0x{:04X}, expected 0x82DC", ether_type),
+            reason: format!(
+                "Invalid Ethernet type: 0x{:04X}, expected 0x82DC",
+                ether_type
+            ),
         });
     }
 
@@ -197,17 +201,19 @@ pub fn validate_ethernet_frame(data: &[u8]) -> ValidationResult {
             // Broadcast - this is fine
         } else {
             // Multicast - warn as BACnet typically uses broadcast
-            result.warnings.push(ValidationWarning::NonStandardConfiguration {
-                reason: "Multicast address used instead of broadcast".into(),
-            });
+            result
+                .warnings
+                .push(ValidationWarning::NonStandardConfiguration {
+                    reason: "Multicast address used instead of broadcast".into(),
+                });
         }
     }
 
     // Warn about small frames (likely padded)
     if data.len() == 60 {
-        result.warnings.push(ValidationWarning::UnusualFrameSize {
-            size: data.len(),
-        });
+        result
+            .warnings
+            .push(ValidationWarning::UnusualFrameSize { size: data.len() });
     }
 
     result
@@ -246,12 +252,16 @@ pub fn validate_mstp_frame(data: &[u8]) -> ValidationResult {
     let frame_type = data[2];
     if frame_type > 7 && frame_type < 128 {
         result.is_valid = false;
-        result.errors.push(ValidationError::InvalidFrameType { value: frame_type });
+        result
+            .errors
+            .push(ValidationError::InvalidFrameType { value: frame_type });
     } else if frame_type >= 128 {
         // Proprietary frame types
-        result.warnings.push(ValidationWarning::NonStandardConfiguration {
-            reason: format!("Proprietary frame type: {}", frame_type),
-        });
+        result
+            .warnings
+            .push(ValidationWarning::NonStandardConfiguration {
+                reason: format!("Proprietary frame type: {}", frame_type),
+            });
     }
 
     // Get addresses
@@ -268,15 +278,17 @@ pub fn validate_mstp_frame(data: &[u8]) -> ValidationResult {
     }
 
     // Check for master talking to slave without poll
-    if src_addr <= 127 && dest_addr >= 128 && dest_addr <= 254 && frame_type != 3 {
-        result.warnings.push(ValidationWarning::NonStandardConfiguration {
-            reason: "Master communicating with slave without Test Request".into(),
-        });
+    if src_addr <= 127 && (128..=254).contains(&dest_addr) && frame_type != 3 {
+        result
+            .warnings
+            .push(ValidationWarning::NonStandardConfiguration {
+                reason: "Master communicating with slave without Test Request".into(),
+            });
     }
 
     // Get data length
     let data_length = ((data[5] as u16) << 8) | (data[6] as u16);
-    
+
     // Check data length
     if data_length > 501 {
         result.is_valid = false;
@@ -289,7 +301,7 @@ pub fn validate_mstp_frame(data: &[u8]) -> ValidationResult {
     let header_crc = data[7];
     let header_bytes = [data[2], data[3], data[4], data[5], data[6]];
     let calculated_crc = calculate_mstp_header_crc(&header_bytes);
-    
+
     if header_crc != calculated_crc {
         result.is_valid = false;
         result.errors.push(ValidationError::CrcMismatch {
@@ -313,13 +325,13 @@ pub fn validate_mstp_frame(data: &[u8]) -> ValidationResult {
         let data_start = 8;
         let data_end = data_start + data_length as usize;
         let frame_data = &data[data_start..data_end];
-        
+
         let crc_low = data[data_end];
         let crc_high = data[data_end + 1];
         let received_crc = ((crc_high as u16) << 8) | (crc_low as u16);
-        
+
         let calculated_crc = crc16_mstp(frame_data);
-        
+
         if received_crc != calculated_crc {
             result.is_valid = false;
             result.errors.push(ValidationError::CrcMismatch {
@@ -339,23 +351,26 @@ pub fn validate_frame(data: &[u8]) -> ValidationResult {
             is_valid: false,
             link_type: None,
             frame_size: 0,
-            errors: vec![ValidationError::FrameTooShort { size: 0, minimum: 1 }],
+            errors: vec![ValidationError::FrameTooShort {
+                size: 0,
+                minimum: 1,
+            }],
             warnings: Vec::new(),
         };
     }
 
     // Try to detect frame type by examining headers
-    
+
     // Check for MS/TP (starts with 0x55, 0xFF)
     if data.len() >= 2 && data[0] == 0x55 && data[1] == 0xFF {
         return validate_mstp_frame(data);
     }
-    
+
     // Check for BACnet/IP (starts with 0x81)
     if data[0] == 0x81 {
         return validate_bacnet_ip_frame(data);
     }
-    
+
     // Check for Ethernet (has BACnet Ethernet type at offset 12-13)
     if data.len() >= 14 {
         let ether_type = ((data[12] as u16) << 8) | (data[13] as u16);
@@ -363,7 +378,7 @@ pub fn validate_frame(data: &[u8]) -> ValidationResult {
             return validate_ethernet_frame(data);
         }
     }
-    
+
     // Unknown frame type
     ValidationResult {
         is_valid: false,
@@ -379,7 +394,7 @@ pub fn validate_frame(data: &[u8]) -> ValidationResult {
 /// Calculate MS/TP header CRC (for validation)
 fn calculate_mstp_header_crc(header: &[u8; 5]) -> u8 {
     let mut crc = 0xFFu8;
-    
+
     for &byte in header {
         crc ^= byte;
         for _ in 0..8 {
@@ -390,14 +405,14 @@ fn calculate_mstp_header_crc(header: &[u8; 5]) -> u8 {
             }
         }
     }
-    
+
     !crc
 }
 
 /// Perform deep frame analysis
 pub fn analyze_frame(data: &[u8]) -> FrameAnalysis {
     let validation = validate_frame(data);
-    
+
     FrameAnalysis {
         validation,
         statistics: calculate_frame_statistics(data),
@@ -435,9 +450,17 @@ pub struct FrameStatistics {
 #[derive(Debug, Clone)]
 pub enum Pattern {
     /// Padding detected
-    Padding { start: usize, length: usize, value: u8 },
+    Padding {
+        start: usize,
+        length: usize,
+        value: u8,
+    },
     /// Repeated sequence
-    RepeatedSequence { start: usize, pattern: Vec<u8>, count: usize },
+    RepeatedSequence {
+        start: usize,
+        pattern: Vec<u8>,
+        count: usize,
+    },
     /// Possible ASCII text
     AsciiText { start: usize, text: String },
     /// Suspicious pattern
@@ -449,7 +472,7 @@ fn calculate_frame_statistics(data: &[u8]) -> FrameStatistics {
     let mut byte_distribution = [0u32; 256];
     let mut null_bytes = 0;
     let mut high_bytes = 0;
-    
+
     // Count byte occurrences
     for &byte in data {
         byte_distribution[byte as usize] += 1;
@@ -460,7 +483,7 @@ fn calculate_frame_statistics(data: &[u8]) -> FrameStatistics {
             high_bytes += 1;
         }
     }
-    
+
     // Calculate entropy
     let total = data.len() as f64;
     let mut entropy = 0.0;
@@ -470,13 +493,13 @@ fn calculate_frame_statistics(data: &[u8]) -> FrameStatistics {
             entropy -= probability * probability.log2();
         }
     }
-    
+
     // Find longest run
     let mut longest_run = (0u8, 0usize);
     if !data.is_empty() {
         let mut current_byte = data[0];
         let mut current_run = 1;
-        
+
         for &byte in &data[1..] {
             if byte == current_byte {
                 current_run += 1;
@@ -488,12 +511,12 @@ fn calculate_frame_statistics(data: &[u8]) -> FrameStatistics {
                 current_run = 1;
             }
         }
-        
+
         if current_run > longest_run.1 {
             longest_run = (current_byte, current_run);
         }
     }
-    
+
     FrameStatistics {
         byte_distribution,
         entropy,
@@ -506,18 +529,18 @@ fn calculate_frame_statistics(data: &[u8]) -> FrameStatistics {
 /// Detect patterns in frame data
 fn detect_patterns(data: &[u8]) -> Vec<Pattern> {
     let mut patterns = Vec::new();
-    
+
     // Detect padding
     if data.len() >= 4 {
         let mut i = data.len() - 1;
         let pad_byte = data[i];
         let mut pad_len = 0;
-        
+
         while i > 0 && data[i] == pad_byte {
             pad_len += 1;
             i -= 1;
         }
-        
+
         if pad_len >= 4 {
             patterns.push(Pattern::Padding {
                 start: i + 1,
@@ -526,13 +549,13 @@ fn detect_patterns(data: &[u8]) -> Vec<Pattern> {
             });
         }
     }
-    
+
     // Detect ASCII text
     let mut ascii_start = None;
     let mut ascii_bytes = Vec::new();
-    
+
     for (i, &byte) in data.iter().enumerate() {
-        if byte >= 0x20 && byte <= 0x7E {
+        if (0x20..=0x7E).contains(&byte) {
             if ascii_start.is_none() {
                 ascii_start = Some(i);
             }
@@ -548,7 +571,7 @@ fn detect_patterns(data: &[u8]) -> Vec<Pattern> {
             ascii_bytes.clear();
         }
     }
-    
+
     // Check remaining ASCII
     if ascii_bytes.len() >= 4 {
         patterns.push(Pattern::AsciiText {
@@ -556,7 +579,7 @@ fn detect_patterns(data: &[u8]) -> Vec<Pattern> {
             text: String::from_utf8_lossy(&ascii_bytes).to_string(),
         });
     }
-    
+
     // Detect suspicious patterns
     if data.len() >= 8 {
         // Check for all zeros (except in padding)
@@ -565,13 +588,13 @@ fn detect_patterns(data: &[u8]) -> Vec<Pattern> {
         } else {
             data.len()
         };
-        
+
         if non_padding_len >= 8 && data[..non_padding_len].iter().all(|&b| b == 0) {
             patterns.push(Pattern::Suspicious {
                 description: "Frame contains all zeros".into(),
             });
         }
-        
+
         // Check for obvious test patterns
         if data.starts_with(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]) {
             patterns.push(Pattern::Suspicious {
@@ -579,7 +602,7 @@ fn detect_patterns(data: &[u8]) -> Vec<Pattern> {
             });
         }
     }
-    
+
     patterns
 }
 
@@ -602,13 +625,19 @@ mod tests {
         let invalid_frame = vec![0x82, 0x0A, 0x00, 0x04];
         let result = validate_bacnet_ip_frame(&invalid_frame);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| matches!(e, ValidationError::InvalidPreamble { .. })));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::InvalidPreamble { .. })));
 
         // Length mismatch
         let invalid_frame = vec![0x81, 0x0A, 0x00, 0x10, 0x01, 0x02];
         let result = validate_bacnet_ip_frame(&invalid_frame);
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| matches!(e, ValidationError::PayloadSizeMismatch { .. })));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::PayloadSizeMismatch { .. })));
     }
 
     #[test]
@@ -622,7 +651,7 @@ mod tests {
         valid_frame[14] = 0x82;
         valid_frame[15] = 0x82;
         valid_frame[16] = 0x03;
-        
+
         let result = validate_ethernet_frame(&valid_frame);
         assert!(result.is_valid);
 
@@ -644,7 +673,7 @@ mod tests {
             0x00, 0x00, // Data length = 0
             0xFC, // Header CRC (correct value for this header)
         ];
-        
+
         let result = validate_mstp_frame(&frame);
         assert!(result.is_valid);
         assert!(result.errors.is_empty());
@@ -679,13 +708,18 @@ mod tests {
         // Frame with padding
         let mut frame = vec![0x01, 0x02, 0x03, 0x04];
         frame.extend_from_slice(&[0x00; 10]);
-        
+
         let patterns = detect_patterns(&frame);
-        assert!(patterns.iter().any(|p| matches!(p, Pattern::Padding { .. })));
+        assert!(patterns
+            .iter()
+            .any(|p| matches!(p, Pattern::Padding { .. })));
 
         // Frame with ASCII text
         let frame = b"Test BACnet Frame";
         let patterns = detect_patterns(frame);
-        assert!(patterns.iter().any(|p| matches!(p, Pattern::AsciiText { .. })));
+        assert!(patterns
+            .iter()
+            .any(|p| matches!(p, Pattern::AsciiText { .. })));
     }
 }
+

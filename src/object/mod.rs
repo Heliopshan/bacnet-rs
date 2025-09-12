@@ -659,15 +659,9 @@ pub enum Segmentation {
 }
 
 /// Protocol services supported bitfield
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ProtocolServicesSupported {
     pub bits: [u8; 5], // 40 bits for all BACnet services
-}
-
-impl Default for ProtocolServicesSupported {
-    fn default() -> Self {
-        Self { bits: [0; 5] }
-    }
 }
 
 impl ProtocolServicesSupported {

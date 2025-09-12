@@ -32,7 +32,7 @@ use std::{
 };
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec::Vec, collections::VecDeque, string::String};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 
 use crate::datalink::{DataLink, DataLinkAddress, DataLinkError, DataLinkType, Result};
 use crate::util::crc16_mstp;
@@ -110,13 +110,18 @@ pub struct MstpFrame {
 
 impl MstpFrame {
     /// Create a new MS/TP frame
-    pub fn new(frame_type: MstpFrameType, destination: u8, source: u8, data: Vec<u8>) -> Result<Self> {
+    pub fn new(
+        frame_type: MstpFrameType,
+        destination: u8,
+        source: u8,
+        data: Vec<u8>,
+    ) -> Result<Self> {
         if data.len() > MSTP_MAX_DATA_LENGTH {
             return Err(DataLinkError::InvalidFrame);
         }
 
         let data_length = data.len() as u16;
-        
+
         // Calculate header CRC (without preamble)
         let header_bytes = [
             frame_type as u8,
@@ -126,7 +131,7 @@ impl MstpFrame {
             (data_length & 0xFF) as u8,
         ];
         let header_crc = calculate_header_crc(&header_bytes);
-        
+
         // Calculate data CRC if there's data
         let data_crc = if !data.is_empty() {
             Some(crc16_mstp(&data))
@@ -151,7 +156,12 @@ impl MstpFrame {
     }
 
     /// Create a BACnet data frame
-    pub fn bacnet_data(destination: u8, source: u8, data: Vec<u8>, expecting_reply: bool) -> Result<Self> {
+    pub fn bacnet_data(
+        destination: u8,
+        source: u8,
+        data: Vec<u8>,
+        expecting_reply: bool,
+    ) -> Result<Self> {
         let frame_type = if expecting_reply {
             MstpFrameType::BacnetDataExpectingReply
         } else {
@@ -163,11 +173,11 @@ impl MstpFrame {
     /// Encode frame to bytes
     pub fn encode(&self) -> Vec<u8> {
         let mut frame = Vec::with_capacity(MSTP_HEADER_SIZE + self.data.len() + 2);
-        
+
         // Preamble
         frame.push(MSTP_PREAMBLE_55);
         frame.push(MSTP_PREAMBLE_FF);
-        
+
         // Header
         frame.push(self.frame_type as u8);
         frame.push(self.destination);
@@ -175,18 +185,18 @@ impl MstpFrame {
         frame.push((self.data_length >> 8) as u8);
         frame.push((self.data_length & 0xFF) as u8);
         frame.push(self.header_crc);
-        
+
         // Data
         if !self.data.is_empty() {
             frame.extend_from_slice(&self.data);
-            
+
             // Data CRC
             if let Some(crc) = self.data_crc {
                 frame.push((crc & 0xFF) as u8);
                 frame.push((crc >> 8) as u8);
             }
         }
-        
+
         frame
     }
 
@@ -202,24 +212,22 @@ impl MstpFrame {
         }
 
         // Parse header
-        let frame_type = MstpFrameType::from_u8(data[2])
-            .ok_or(DataLinkError::InvalidFrame)?;
+        let frame_type = MstpFrameType::from_u8(data[2]).ok_or(DataLinkError::InvalidFrame)?;
         let destination = data[3];
         let source = data[4];
         let data_length = ((data[5] as u16) << 8) | (data[6] as u16);
         let header_crc = data[7];
 
         // Verify header CRC
-        let header_bytes = [
-            data[2], data[3], data[4], data[5], data[6]
-        ];
+        let header_bytes = [data[2], data[3], data[4], data[5], data[6]];
         let calculated_crc = calculate_header_crc(&header_bytes);
         if calculated_crc != header_crc {
             return Err(DataLinkError::CrcError);
         }
 
         // Check frame size
-        let expected_size = MSTP_HEADER_SIZE + data_length as usize + if data_length > 0 { 2 } else { 0 };
+        let expected_size =
+            MSTP_HEADER_SIZE + data_length as usize + if data_length > 0 { 2 } else { 0 };
         if data.len() != expected_size {
             return Err(DataLinkError::InvalidFrame);
         }
@@ -229,18 +237,18 @@ impl MstpFrame {
             let data_start = MSTP_HEADER_SIZE;
             let data_end = data_start + data_length as usize;
             let frame_data = data[data_start..data_end].to_vec();
-            
+
             // Get data CRC
             let crc_low = data[data_end];
             let crc_high = data[data_end + 1];
             let data_crc = ((crc_high as u16) << 8) | (crc_low as u16);
-            
+
             // Verify data CRC
             let calculated_crc = crc16_mstp(&frame_data);
             if calculated_crc != data_crc {
                 return Err(DataLinkError::CrcError);
             }
-            
+
             (frame_data, Some(data_crc))
         } else {
             (Vec::new(), None)
@@ -264,9 +272,10 @@ impl MstpFrame {
 
     /// Check if this is a data frame
     pub fn is_data(&self) -> bool {
-        matches!(self.frame_type, 
-            MstpFrameType::BacnetDataExpectingReply | 
-            MstpFrameType::BacnetDataNotExpectingReply)
+        matches!(
+            self.frame_type,
+            MstpFrameType::BacnetDataExpectingReply | MstpFrameType::BacnetDataNotExpectingReply
+        )
     }
 }
 
@@ -317,6 +326,9 @@ impl Default for MstpConfig {
     }
 }
 
+type SendQueue = Arc<Mutex<VecDeque<(MstpFrame, DataLinkAddress)>>>;
+type ReceiveQueue = Arc<Mutex<VecDeque<(Vec<u8>, DataLinkAddress)>>>;
+
 /// MS/TP data link implementation
 #[cfg(feature = "std")]
 pub struct MstpDataLink {
@@ -329,9 +341,9 @@ pub struct MstpDataLink {
     /// Next station for token passing
     _next_station: Arc<Mutex<u8>>,
     /// Send queue
-    send_queue: Arc<Mutex<VecDeque<(MstpFrame, DataLinkAddress)>>>,
+    send_queue: SendQueue,
     /// Receive queue
-    receive_queue: Arc<Mutex<VecDeque<(Vec<u8>, DataLinkAddress)>>>,
+    receive_queue: ReceiveQueue,
     /// Serial port name
     _port_name: String,
     /// Running flag
@@ -341,13 +353,15 @@ pub struct MstpDataLink {
 #[cfg(feature = "std")]
 impl MstpDataLink {
     /// Create a new MS/TP data link
-    /// 
+    ///
     /// Note: In a real implementation, this would use a serial port library
     /// to communicate over RS-485. This is a simplified simulation.
     pub fn new(port_name: &str, config: MstpConfig) -> Result<Self> {
         let state = Arc::new(Mutex::new(MstpState::Initialize));
         let token_holder = Arc::new(Mutex::new(None));
-        let next_station = Arc::new(Mutex::new((config.station_address + 1) % (config.max_master + 1)));
+        let next_station = Arc::new(Mutex::new(
+            (config.station_address + 1) % (config.max_master + 1),
+        ));
         let send_queue = Arc::new(Mutex::new(VecDeque::new()));
         let receive_queue = Arc::new(Mutex::new(VecDeque::new()));
         let running = Arc::new(Mutex::new(true));
@@ -378,8 +392,9 @@ impl MstpDataLink {
         // 4. Disable RS-485 transmitter
 
         let encoded = frame.encode();
-        
-        println!("MS/TP: Sending {} frame from {} to {}, {} bytes",
+
+        println!(
+            "MS/TP: Sending {} frame from {} to {}, {} bytes",
             match frame.frame_type {
                 MstpFrameType::Token => "Token",
                 MstpFrameType::BacnetDataExpectingReply => "Data (expecting reply)",
@@ -397,7 +412,7 @@ impl MstpDataLink {
     /// Handle token possession
     fn _handle_token(&mut self) -> Result<()> {
         let mut send_queue = self.send_queue.lock().unwrap();
-        
+
         // Send up to max_info_frames
         let mut frames_sent = 0;
         while frames_sent < self.config.max_info_frames && !send_queue.is_empty() {
@@ -426,11 +441,11 @@ impl MstpDataLink {
             let mut receive_queue = self.receive_queue.lock().unwrap();
             receive_queue.push_back((frame.data.clone(), DataLinkAddress::MsTP(frame.source)));
         }
-        
+
         if frame.is_token() && frame.destination == self.config.station_address {
             let mut token_holder = self._token_holder.lock().unwrap();
             *token_holder = Some(self.config.station_address);
-            
+
             let mut state = self._state.lock().unwrap();
             *state = MstpState::UseToken;
         }
@@ -443,7 +458,11 @@ impl DataLink for MstpDataLink {
         let dest_addr = match dest {
             DataLinkAddress::MsTP(addr) => *addr,
             DataLinkAddress::Broadcast => 255,
-            _ => return Err(DataLinkError::AddressError("Invalid address type for MS/TP".into())),
+            _ => {
+                return Err(DataLinkError::AddressError(
+                    "Invalid address type for MS/TP".into(),
+                ))
+            }
         };
 
         // Create MS/TP frame
@@ -451,7 +470,7 @@ impl DataLink for MstpDataLink {
             dest_addr,
             self.config.station_address,
             frame.to_vec(),
-            false // For now, assume no reply expected
+            false, // For now, assume no reply expected
         )?;
 
         // Queue frame for sending when we have the token
@@ -463,7 +482,7 @@ impl DataLink for MstpDataLink {
 
     fn receive_frame(&mut self) -> Result<(Vec<u8>, DataLinkAddress)> {
         let mut receive_queue = self.receive_queue.lock().unwrap();
-        
+
         if let Some((data, source)) = receive_queue.pop_front() {
             Ok((data, source))
         } else {
@@ -484,7 +503,7 @@ impl DataLink for MstpDataLink {
 /// Calculate MS/TP header CRC
 fn calculate_header_crc(header: &[u8; 5]) -> u8 {
     let mut crc = 0xFFu8;
-    
+
     for &byte in header {
         crc ^= byte;
         for _ in 0..8 {
@@ -495,17 +514,17 @@ fn calculate_header_crc(header: &[u8; 5]) -> u8 {
             }
         }
     }
-    
+
     !crc
 }
 
 /// Validate MS/TP address
 pub fn validate_mstp_address(address: u8) -> Result<()> {
     match address {
-        0..=127 => Ok(()), // Master addresses
+        0..=127 => Ok(()),   // Master addresses
         128..=254 => Ok(()), // Slave addresses
-        255 => Ok(()), // Broadcast
-        // Note: Rust's u8 can't be > 255, so this is exhaustive
+        255 => Ok(()),       // Broadcast
+                              // Note: Rust's u8 can't be > 255, so this is exhaustive
     }
 }
 
@@ -516,7 +535,7 @@ pub fn is_master_node(address: u8) -> bool {
 
 /// Check if address is a slave node
 pub fn is_slave_node(address: u8) -> bool {
-    address >= 128 && address <= 254
+    (128..=254).contains(&address)
 }
 
 #[cfg(test)]
@@ -529,7 +548,7 @@ mod tests {
         let token_frame = MstpFrame::token(5, 3).unwrap();
         let encoded = token_frame.encode();
         let decoded = MstpFrame::decode(&encoded).unwrap();
-        
+
         assert_eq!(decoded.frame_type, MstpFrameType::Token);
         assert_eq!(decoded.destination, 5);
         assert_eq!(decoded.source, 3);
@@ -542,7 +561,7 @@ mod tests {
         let data_frame = MstpFrame::bacnet_data(10, 20, data.clone(), true).unwrap();
         let encoded = data_frame.encode();
         let decoded = MstpFrame::decode(&encoded).unwrap();
-        
+
         assert_eq!(decoded.frame_type, MstpFrameType::BacnetDataExpectingReply);
         assert_eq!(decoded.destination, 10);
         assert_eq!(decoded.source, 20);
@@ -555,7 +574,7 @@ mod tests {
     fn test_header_crc() {
         let header = [0x00, 0x05, 0x03, 0x00, 0x00]; // Token frame header
         let crc = calculate_header_crc(&header);
-        
+
         // Create frame and verify CRC matches
         let frame = MstpFrame::token(5, 3).unwrap();
         assert_eq!(frame.header_crc, crc);
@@ -585,11 +604,11 @@ mod tests {
         assert!(validate_mstp_address(128).is_ok()); // Slave
         assert!(validate_mstp_address(254).is_ok()); // Slave
         assert!(validate_mstp_address(255).is_ok()); // Broadcast
-        
+
         assert!(is_master_node(0));
         assert!(is_master_node(127));
         assert!(!is_master_node(128));
-        
+
         assert!(!is_slave_node(127));
         assert!(is_slave_node(128));
         assert!(is_slave_node(254));
@@ -601,7 +620,7 @@ mod tests {
         let data = vec![0u8; MSTP_MAX_DATA_LENGTH + 1];
         let result = MstpFrame::bacnet_data(10, 20, data, false);
         assert!(result.is_err());
-        
+
         let data = vec![0u8; MSTP_MAX_DATA_LENGTH];
         let result = MstpFrame::bacnet_data(10, 20, data, false);
         assert!(result.is_ok());
@@ -614,19 +633,20 @@ mod tests {
             station_address: 5,
             ..Default::default()
         };
-        
+
         let mut datalink = MstpDataLink::new("COM1", config).unwrap();
-        
+
         assert_eq!(datalink.link_type(), DataLinkType::MsTP);
         assert_eq!(datalink.local_address(), DataLinkAddress::MsTP(5));
-        
+
         // Test sending
         let npdu = vec![0x01, 0x02, 0x03, 0x04];
         let result = datalink.send_frame(&npdu, &DataLinkAddress::MsTP(10));
         assert!(result.is_ok());
-        
+
         // Test broadcast
         let result = datalink.send_frame(&npdu, &DataLinkAddress::Broadcast);
         assert!(result.is_ok());
     }
 }
+

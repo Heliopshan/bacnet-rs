@@ -304,10 +304,10 @@ pub fn encode_unsigned(buffer: &mut Vec<u8>, value: u32) -> Result<()> {
     } else if value <= 0xFFFF {
         (value as u16).to_be_bytes().to_vec()
     } else if value <= 0xFFFFFF {
-        let bytes = (value as u32).to_be_bytes();
+        let bytes = value.to_be_bytes();
         bytes[1..].to_vec()
     } else {
-        (value as u32).to_be_bytes().to_vec()
+        value.to_be_bytes().to_vec()
     };
 
     encode_application_tag(buffer, ApplicationTag::UnsignedInt, bytes.len())?;
@@ -349,15 +349,15 @@ pub fn decode_unsigned(data: &[u8]) -> Result<(u32, usize)> {
 
 /// Encode a BACnet signed integer
 pub fn encode_signed(buffer: &mut Vec<u8>, value: i32) -> Result<()> {
-    let bytes = if value >= -128 && value <= 127 {
+    let bytes = if (-128..=127).contains(&value) {
         vec![value as u8]
-    } else if value >= -32768 && value <= 32767 {
+    } else if (-32768..=32767).contains(&value) {
         (value as i16).to_be_bytes().to_vec()
-    } else if value >= -8388608 && value <= 8388607 {
-        let bytes = (value as i32).to_be_bytes();
+    } else if (-8388608..=8388607).contains(&value) {
+        let bytes = value.to_be_bytes();
         bytes[1..].to_vec()
     } else {
-        (value as i32).to_be_bytes().to_vec()
+        value.to_be_bytes().to_vec()
     };
 
     encode_application_tag(buffer, ApplicationTag::SignedInt, bytes.len())?;
@@ -511,10 +511,10 @@ pub fn encode_enumerated(buffer: &mut Vec<u8>, value: u32) -> Result<()> {
     } else if value <= 0xFFFF {
         (value as u16).to_be_bytes().to_vec()
     } else if value <= 0xFFFFFF {
-        let bytes = (value as u32).to_be_bytes();
+        let bytes = value.to_be_bytes();
         bytes[1..].to_vec()
     } else {
-        (value as u32).to_be_bytes().to_vec()
+        value.to_be_bytes().to_vec()
     };
 
     encode_application_tag(buffer, ApplicationTag::Enumerated, bytes.len())?;
@@ -743,10 +743,10 @@ pub fn encode_context_unsigned(value: u32, tag_number: u8) -> Result<Vec<u8>> {
     } else if value <= 0xFFFF {
         (value as u16).to_be_bytes().to_vec()
     } else if value <= 0xFFFFFF {
-        let bytes = (value as u32).to_be_bytes();
+        let bytes = value.to_be_bytes();
         bytes[1..].to_vec()
     } else {
-        (value as u32).to_be_bytes().to_vec()
+        value.to_be_bytes().to_vec()
     };
 
     // Encode the context tag
@@ -1098,7 +1098,7 @@ pub mod advanced {
 
         /// Encode a bit string
         pub fn encode_bit_string(buffer: &mut Vec<u8>, bits: &[bool]) -> Result<()> {
-            let byte_count = (bits.len() + 7) / 8;
+            let byte_count = bits.len().div_ceil(8);
             let unused_bits = if bits.len() % 8 == 0 {
                 0
             } else {
@@ -1215,12 +1215,12 @@ pub mod advanced {
                         self.buffer.extend_from_slice(&bytes);
                     }
                     65536..=16777215 => {
-                        let bytes = (value as u32).to_be_bytes();
+                        let bytes = value.to_be_bytes();
                         self.buffer.extend_from_slice(&[0x23]);
                         self.buffer.extend_from_slice(&bytes[1..]);
                     }
                     _ => {
-                        let bytes = (value as u32).to_be_bytes();
+                        let bytes = value.to_be_bytes();
                         self.buffer.extend_from_slice(&[0x24]);
                         self.buffer.extend_from_slice(&bytes);
                     }
@@ -1581,6 +1581,7 @@ impl<'a> DecodingStream<'a> {
 }
 
 /// Property array encoder
+#[derive(Default)]
 pub struct PropertyArrayEncoder {
     buffer: Vec<u8>,
     count: usize,
@@ -1632,6 +1633,7 @@ impl PropertyArrayEncoder {
 }
 
 /// Error encoder for BACnet error PDUs
+#[derive(Default)]
 pub struct ErrorEncoder {
     buffer: Vec<u8>,
 }

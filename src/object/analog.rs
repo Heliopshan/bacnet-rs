@@ -4,8 +4,8 @@
 //! as defined in ASHRAE 135. These objects represent analog (continuous) values in BACnet.
 
 use crate::object::{
-    BacnetObject, ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue, 
-    ObjectError, Result,
+    BacnetObject, ObjectError, ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue,
+    Result,
 };
 
 #[cfg(not(feature = "std"))]
@@ -200,12 +200,26 @@ impl AnalogInput {
     }
 
     /// Set status flags from individual booleans
-    pub fn set_status_flags(&mut self, in_alarm: bool, fault: bool, overridden: bool, out_of_service: bool) {
+    pub fn set_status_flags(
+        &mut self,
+        in_alarm: bool,
+        fault: bool,
+        overridden: bool,
+        out_of_service: bool,
+    ) {
         self.status_flags = 0;
-        if in_alarm { self.status_flags |= 0x08; }
-        if fault { self.status_flags |= 0x04; }
-        if overridden { self.status_flags |= 0x02; }
-        if out_of_service { self.status_flags |= 0x01; }
+        if in_alarm {
+            self.status_flags |= 0x08;
+        }
+        if fault {
+            self.status_flags |= 0x04;
+        }
+        if overridden {
+            self.status_flags |= 0x02;
+        }
+        if out_of_service {
+            self.status_flags |= 0x01;
+        }
     }
 }
 
@@ -234,8 +248,10 @@ impl AnalogOutput {
 
     /// Write to priority array at specified priority level (1-16)
     pub fn write_priority(&mut self, priority: u8, value: Option<f32>) -> Result<()> {
-        if priority < 1 || priority > 16 {
-            return Err(ObjectError::InvalidValue("Priority must be 1-16".to_string()));
+        if !(1..=16).contains(&priority) {
+            return Err(ObjectError::InvalidValue(
+                "Priority must be 1-16".to_string(),
+            ));
         }
         self.priority_array[(priority - 1) as usize] = value;
         self.update_present_value();
@@ -245,11 +261,9 @@ impl AnalogOutput {
     /// Update present value based on priority array
     fn update_present_value(&mut self) {
         // Find highest priority non-null value
-        for priority_value in &self.priority_array {
-            if let Some(value) = priority_value {
-                self.present_value = *value;
-                return;
-            }
+        if let Some(value) = self.priority_array.iter().flatten().next() {
+            self.present_value = *value;
+            return;
         }
         // If all priorities are null, use relinquish default
         self.present_value = self.relinquish_default;
@@ -287,8 +301,10 @@ impl AnalogValue {
 
     /// Write to priority array at specified priority level (1-16)
     pub fn write_priority(&mut self, priority: u8, value: Option<f32>) -> Result<()> {
-        if priority < 1 || priority > 16 {
-            return Err(ObjectError::InvalidValue("Priority must be 1-16".to_string()));
+        if !(1..=16).contains(&priority) {
+            return Err(ObjectError::InvalidValue(
+                "Priority must be 1-16".to_string(),
+            ));
         }
         self.priority_array[(priority - 1) as usize] = value;
         self.update_present_value();
@@ -298,11 +314,9 @@ impl AnalogValue {
     /// Update present value based on priority array
     fn update_present_value(&mut self) {
         // Find highest priority non-null value
-        for priority_value in &self.priority_array {
-            if let Some(value) = priority_value {
-                self.present_value = *value;
-                return;
-            }
+        if let Some(value) = self.priority_array.iter().flatten().next() {
+            self.present_value = *value;
+            return;
         }
         // If all priorities are null, use relinquish default
         self.present_value = self.relinquish_default;
@@ -325,12 +339,8 @@ impl BacnetObject for AnalogInput {
             PropertyIdentifier::ObjectType => {
                 Ok(PropertyValue::Enumerated(ObjectType::AnalogInput as u32))
             }
-            PropertyIdentifier::PresentValue => {
-                Ok(PropertyValue::Real(self.present_value))
-            }
-            PropertyIdentifier::OutOfService => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
-            }
+            PropertyIdentifier::PresentValue => Ok(PropertyValue::Real(self.present_value)),
+            PropertyIdentifier::OutOfService => Ok(PropertyValue::Boolean(self.out_of_service)),
             _ => Err(ObjectError::UnknownProperty),
         }
     }
@@ -391,14 +401,11 @@ impl BacnetObject for AnalogOutput {
             PropertyIdentifier::ObjectType => {
                 Ok(PropertyValue::Enumerated(ObjectType::AnalogOutput as u32))
             }
-            PropertyIdentifier::PresentValue => {
-                Ok(PropertyValue::Real(self.present_value))
-            }
-            PropertyIdentifier::OutOfService => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
-            }
+            PropertyIdentifier::PresentValue => Ok(PropertyValue::Real(self.present_value)),
+            PropertyIdentifier::OutOfService => Ok(PropertyValue::Boolean(self.out_of_service)),
             PropertyIdentifier::PriorityArray => {
-                let array: Vec<PropertyValue> = self.priority_array
+                let array: Vec<PropertyValue> = self
+                    .priority_array
                     .iter()
                     .map(|&v| match v {
                         Some(val) => PropertyValue::Real(val),
@@ -444,8 +451,8 @@ impl BacnetObject for AnalogOutput {
     fn is_property_writable(&self, property: PropertyIdentifier) -> bool {
         matches!(
             property,
-            PropertyIdentifier::ObjectName 
-                | PropertyIdentifier::PresentValue 
+            PropertyIdentifier::ObjectName
+                | PropertyIdentifier::PresentValue
                 | PropertyIdentifier::OutOfService
         )
     }
@@ -478,14 +485,11 @@ impl BacnetObject for AnalogValue {
             PropertyIdentifier::ObjectType => {
                 Ok(PropertyValue::Enumerated(ObjectType::AnalogValue as u32))
             }
-            PropertyIdentifier::PresentValue => {
-                Ok(PropertyValue::Real(self.present_value))
-            }
-            PropertyIdentifier::OutOfService => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
-            }
+            PropertyIdentifier::PresentValue => Ok(PropertyValue::Real(self.present_value)),
+            PropertyIdentifier::OutOfService => Ok(PropertyValue::Boolean(self.out_of_service)),
             PropertyIdentifier::PriorityArray => {
-                let array: Vec<PropertyValue> = self.priority_array
+                let array: Vec<PropertyValue> = self
+                    .priority_array
                     .iter()
                     .map(|&v| match v {
                         Some(val) => PropertyValue::Real(val),
@@ -531,8 +535,8 @@ impl BacnetObject for AnalogValue {
     fn is_property_writable(&self, property: PropertyIdentifier) -> bool {
         matches!(
             property,
-            PropertyIdentifier::ObjectName 
-                | PropertyIdentifier::PresentValue 
+            PropertyIdentifier::ObjectName
+                | PropertyIdentifier::PresentValue
                 | PropertyIdentifier::OutOfService
         )
     }
@@ -565,7 +569,7 @@ mod tests {
     #[test]
     fn test_analog_output_priority() {
         let mut ao = AnalogOutput::new(1, "Damper Position".to_string());
-        
+
         // Write to priority 8
         ao.write_priority(8, Some(75.0)).unwrap();
         assert_eq!(ao.present_value, 75.0);
@@ -590,7 +594,7 @@ mod tests {
     #[test]
     fn test_analog_object_properties() {
         let mut av = AnalogValue::new(1, "Test Value".to_string());
-        
+
         // Test property access
         let name = av.get_property(PropertyIdentifier::ObjectName).unwrap();
         if let PropertyValue::CharacterString(n) = name {
@@ -600,10 +604,8 @@ mod tests {
         }
 
         // Test property modification
-        av.set_property(
-            PropertyIdentifier::PresentValue,
-            PropertyValue::Real(42.5),
-        ).unwrap();
+        av.set_property(PropertyIdentifier::PresentValue, PropertyValue::Real(42.5))
+            .unwrap();
         assert_eq!(av.present_value, 42.5);
 
         // Test writable properties
@@ -614,7 +616,7 @@ mod tests {
     #[test]
     fn test_status_flags() {
         let mut ai = AnalogInput::new(1, "Test".to_string());
-        
+
         ai.set_status_flags(true, false, true, false);
         let (in_alarm, fault, overridden, out_of_service) = ai.get_status_flags();
         assert_eq!(in_alarm, true);
@@ -624,3 +626,4 @@ mod tests {
         assert_eq!(ai.status_flags, 0x0A); // 1010 in binary
     }
 }
+

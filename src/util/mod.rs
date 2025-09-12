@@ -493,7 +493,7 @@ pub mod priority {
 
     /// Check if priority is valid (1-16)
     pub fn is_valid(priority: u8) -> bool {
-        priority >= 1 && priority <= 16
+        (1..=16).contains(&priority)
     }
 }
 
@@ -518,6 +518,12 @@ pub mod performance {
     pub struct PerformanceMonitor {
         metrics: Arc<Mutex<HashMap<String, OperationMetrics>>>,
         active_timers: Arc<Mutex<HashMap<String, Instant>>>,
+    }
+
+    impl Default for PerformanceMonitor {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl PerformanceMonitor {
@@ -734,6 +740,12 @@ pub mod statistics {
         global_stats: Arc<Mutex<CommunicationStats>>,
     }
 
+    impl Default for StatsCollector {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     #[cfg(feature = "std")]
     impl StatsCollector {
         /// Create a new statistics collector
@@ -792,7 +804,7 @@ pub mod statistics {
     }
 }
 
-/// Additional utility functions
+// Additional utility functions
 
 /// Validate BACnet network number (0-65534, 65535 is broadcast)
 pub fn is_valid_network_number(_network: u16) -> bool {
