@@ -52,8 +52,8 @@ use alloc::{string::String, vec::Vec};
 #[cfg(not(feature = "std"))]
 use core::time::Duration;
 
-use crate::service::{ConfirmedServiceChoice, UnconfirmedServiceChoice, RejectReason, AbortReason};
 use crate::object::Segmentation;
+use crate::service::{AbortReason, ConfirmedServiceChoice, RejectReason, UnconfirmedServiceChoice};
 
 /// Result type for application layer operations
 #[cfg(feature = "std")]
@@ -131,7 +131,7 @@ pub enum Apdu {
 
     /// Unconfirmed service request
     UnconfirmedRequest {
-        service_choice: u8,
+        service_choice: UnconfirmedServiceChoice,
         service_data: Vec<u8>,
     },
 
@@ -307,7 +307,7 @@ impl Apdu {
                 // PDU Type
                 buffer.push((ApduType::UnconfirmedRequest as u8) << 4);
                 // Service choice
-                buffer.push(*service_choice);
+                buffer.push(*service_choice as u8);
                 // Service data
                 buffer.extend_from_slice(service_data);
             }
@@ -499,9 +499,17 @@ impl Apdu {
                 let mut pos = 3;
 
                 let (sequence_number, proposed_window_size) = if segmented {
-                    let seq_num = if pos < data.len() { Some(data[pos]) } else { None };
+                    let seq_num = if pos < data.len() {
+                        Some(data[pos])
+                    } else {
+                        None
+                    };
                     pos += 1;
-                    let win_size = if pos < data.len() { Some(data[pos]) } else { None };
+                    let win_size = if pos < data.len() {
+                        Some(data[pos])
+                    } else {
+                        None
+                    };
                     pos += 1;
                     (seq_num, win_size)
                 } else {
@@ -544,7 +552,9 @@ impl Apdu {
                     ));
                 }
 
-                let service_choice = data[1];
+                let service_choice = data[1].try_into().map_err(|_| {
+                    ApplicationError::InvalidApdu("Unsupported service choice".to_string())
+                })?;
                 let service_data = if data.len() > 2 {
                     data[2..].to_vec()
                 } else {
@@ -559,7 +569,9 @@ impl Apdu {
 
             ApduType::SimpleAck => {
                 if data.len() < 3 {
-                    return Err(ApplicationError::InvalidApdu("SimpleAck too short".to_string()));
+                    return Err(ApplicationError::InvalidApdu(
+                        "SimpleAck too short".to_string(),
+                    ));
                 }
 
                 let invoke_id = data[1];
@@ -573,7 +585,9 @@ impl Apdu {
 
             ApduType::ComplexAck => {
                 if data.len() < 3 {
-                    return Err(ApplicationError::InvalidApdu("ComplexAck too short".to_string()));
+                    return Err(ApplicationError::InvalidApdu(
+                        "ComplexAck too short".to_string(),
+                    ));
                 }
 
                 let segmented = (pdu_type_byte & 0x08) != 0;
@@ -583,9 +597,17 @@ impl Apdu {
                 let mut pos = 2;
 
                 let (sequence_number, proposed_window_size) = if segmented {
-                    let seq_num = if pos < data.len() { Some(data[pos]) } else { None };
+                    let seq_num = if pos < data.len() {
+                        Some(data[pos])
+                    } else {
+                        None
+                    };
                     pos += 1;
-                    let win_size = if pos < data.len() { Some(data[pos]) } else { None };
+                    let win_size = if pos < data.len() {
+                        Some(data[pos])
+                    } else {
+                        None
+                    };
                     pos += 1;
                     (seq_num, win_size)
                 } else {
@@ -620,7 +642,9 @@ impl Apdu {
 
             ApduType::SegmentAck => {
                 if data.len() < 4 {
-                    return Err(ApplicationError::InvalidApdu("SegmentAck too short".to_string()));
+                    return Err(ApplicationError::InvalidApdu(
+                        "SegmentAck too short".to_string(),
+                    ));
                 }
 
                 let negative = (pdu_type_byte & 0x02) != 0;
@@ -640,7 +664,9 @@ impl Apdu {
 
             ApduType::Error => {
                 if data.len() < 5 {
-                    return Err(ApplicationError::InvalidApdu("Error PDU too short".to_string()));
+                    return Err(ApplicationError::InvalidApdu(
+                        "Error PDU too short".to_string(),
+                    ));
                 }
 
                 let invoke_id = data[1];
@@ -658,7 +684,9 @@ impl Apdu {
 
             ApduType::Reject => {
                 if data.len() < 3 {
-                    return Err(ApplicationError::InvalidApdu("Reject PDU too short".to_string()));
+                    return Err(ApplicationError::InvalidApdu(
+                        "Reject PDU too short".to_string(),
+                    ));
                 }
 
                 let invoke_id = data[1];
@@ -672,7 +700,9 @@ impl Apdu {
 
             ApduType::Abort => {
                 if data.len() < 3 {
-                    return Err(ApplicationError::InvalidApdu("Abort PDU too short".to_string()));
+                    return Err(ApplicationError::InvalidApdu(
+                        "Abort PDU too short".to_string(),
+                    ));
                 }
 
                 let server = (pdu_type_byte & 0x01) != 0;
@@ -708,7 +738,7 @@ impl InvokeIdManager {
     /// Get the next available invoke ID
     pub fn next_id(&mut self) -> Option<u8> {
         let start_id = self.next_id;
-        
+
         loop {
             if !self.active_ids.contains(&self.next_id) {
                 let id = self.next_id;
@@ -716,9 +746,9 @@ impl InvokeIdManager {
                 self.next_id = self.next_id.wrapping_add(1);
                 return Some(id);
             }
-            
+
             self.next_id = self.next_id.wrapping_add(1);
-            
+
             // Prevent infinite loop
             if self.next_id == start_id {
                 return None;
@@ -856,8 +886,12 @@ impl SegmentReassemblyBuffer {
     /// Check if all segments have been received
     pub fn is_complete(&self) -> bool {
         if let Some(total) = self.total_segments {
-            self.segments.len() == total as usize &&
-            self.segments.iter().enumerate().all(|(i, (seq, _))| *seq == i as u8)
+            self.segments.len() == total as usize
+                && self
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (seq, _))| *seq == i as u8)
         } else {
             false
         }
@@ -866,7 +900,9 @@ impl SegmentReassemblyBuffer {
     /// Reassemble the complete message
     pub fn reassemble(&self) -> Result<Vec<u8>> {
         if !self.is_complete() {
-            return Err(ApplicationError::SegmentationError("Incomplete segments".to_string()));
+            return Err(ApplicationError::SegmentationError(
+                "Incomplete segments".to_string(),
+            ));
         }
 
         let mut result = Vec::new();
@@ -938,10 +974,10 @@ impl SegmentationManager {
         }
 
         let segment_count = (data.len() + max_segment_size - 1) / max_segment_size;
-        
+
         if segment_count > max_segments as usize {
             return Err(ApplicationError::SegmentationError(
-                "Message too large for segmentation".to_string()
+                "Message too large for segmentation".to_string(),
             ));
         }
 
@@ -967,7 +1003,8 @@ impl SegmentationManager {
         max_apdu_length: u16,
     ) -> Result<Option<Vec<u8>>> {
         // Find or create reassembly buffer
-        let buffer_index = self.reassembly_buffers
+        let buffer_index = self
+            .reassembly_buffers
             .iter()
             .position(|buffer| buffer.invoke_id == invoke_id);
 
@@ -979,8 +1016,9 @@ impl SegmentationManager {
                 // Remove oldest buffer
                 self.cleanup_oldest_buffer();
             }
-            
-            self.reassembly_buffers.push(SegmentReassemblyBuffer::new(invoke_id, max_apdu_length));
+
+            self.reassembly_buffers
+                .push(SegmentReassemblyBuffer::new(invoke_id, max_apdu_length));
             self.reassembly_buffers.last_mut().unwrap()
         };
 
@@ -1010,9 +1048,8 @@ impl SegmentationManager {
     /// Cleanup timed out reassembly buffers
     #[cfg(feature = "std")]
     pub fn cleanup_timed_out_buffers(&mut self) {
-        self.reassembly_buffers.retain(|buffer| {
-            !buffer.is_timed_out(self.segment_timeout)
-        });
+        self.reassembly_buffers
+            .retain(|buffer| !buffer.is_timed_out(self.segment_timeout));
     }
 
     /// Remove the oldest reassembly buffer
@@ -1021,7 +1058,8 @@ impl SegmentationManager {
             #[cfg(feature = "std")]
             {
                 // Find the buffer with the oldest last_activity
-                let oldest_index = self.reassembly_buffers
+                let oldest_index = self
+                    .reassembly_buffers
                     .iter()
                     .enumerate()
                     .min_by_key(|(_, buffer)| buffer.last_activity)
@@ -1082,7 +1120,7 @@ pub struct SupportedServices {
 impl Default for SupportedServices {
     fn default() -> Self {
         use crate::service::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
-        
+
         Self {
             confirmed: vec![
                 ConfirmedServiceChoice::ReadProperty,
@@ -1137,9 +1175,18 @@ impl ApplicationLayerHandler {
         self.stats.apdus_received += 1;
 
         match apdu {
-            Apdu::ConfirmedRequest { segmented, more_follows, segmented_response_accepted, 
-                                   max_segments: _, max_response_size: _, invoke_id, sequence_number: _, 
-                                   proposed_window_size: _, service_choice, service_data } => {
+            Apdu::ConfirmedRequest {
+                segmented,
+                more_follows,
+                segmented_response_accepted,
+                max_segments: _,
+                max_response_size: _,
+                invoke_id,
+                sequence_number: _,
+                proposed_window_size: _,
+                service_choice,
+                service_data,
+            } => {
                 let pdu_flags = PduFlags {
                     segmented: *segmented,
                     more_follows: *more_follows,
@@ -1147,14 +1194,23 @@ impl ApplicationLayerHandler {
                 };
                 self.process_confirmed_request(pdu_flags, *invoke_id, *service_choice, service_data)
             }
-            Apdu::UnconfirmedRequest { service_choice, service_data } => {
-                self.process_unconfirmed_request(*service_choice, service_data)
-            }
-            Apdu::SimpleAck { invoke_id, service_choice } => {
-                self.process_simple_ack(*invoke_id, *service_choice)
-            }
-            Apdu::ComplexAck { segmented, more_follows, invoke_id, sequence_number: _, 
-                             proposed_window_size: _, service_choice, service_data } => {
+            Apdu::UnconfirmedRequest {
+                service_choice,
+                service_data,
+            } => self.process_unconfirmed_request(*service_choice, service_data),
+            Apdu::SimpleAck {
+                invoke_id,
+                service_choice,
+            } => self.process_simple_ack(*invoke_id, *service_choice),
+            Apdu::ComplexAck {
+                segmented,
+                more_follows,
+                invoke_id,
+                sequence_number: _,
+                proposed_window_size: _,
+                service_choice,
+                service_data,
+            } => {
                 let pdu_flags = PduFlags {
                     segmented: *segmented,
                     more_follows: *more_follows,
@@ -1162,15 +1218,21 @@ impl ApplicationLayerHandler {
                 };
                 self.process_complex_ack(pdu_flags, *invoke_id, *service_choice, service_data)
             }
-            Apdu::Error { invoke_id, service_choice, error_class, error_code } => {
-                self.process_error(*invoke_id, *service_choice, *error_class, *error_code)
-            }
-            Apdu::Reject { invoke_id, reject_reason } => {
-                self.process_reject(*invoke_id, *reject_reason)
-            }
-            Apdu::Abort { server, invoke_id, abort_reason } => {
-                self.process_abort(*server, *invoke_id, *abort_reason)
-            }
+            Apdu::Error {
+                invoke_id,
+                service_choice,
+                error_class,
+                error_code,
+            } => self.process_error(*invoke_id, *service_choice, *error_class, *error_code),
+            Apdu::Reject {
+                invoke_id,
+                reject_reason,
+            } => self.process_reject(*invoke_id, *reject_reason),
+            Apdu::Abort {
+                server,
+                invoke_id,
+                abort_reason,
+            } => self.process_abort(*server, *invoke_id, *abort_reason),
             _ => {
                 self.stats.unknown_apdus += 1;
                 Err(ApplicationError::UnsupportedApduType)
@@ -1217,17 +1279,15 @@ impl ApplicationLayerHandler {
             ConfirmedServiceChoice::ReadProperty => {
                 if let Some(ref processor) = self.service_processors.read_property {
                     match processor(service_data) {
-                        Ok(response_data) => {
-                            Ok(Some(Apdu::ComplexAck {
-                                segmented: false,
-                                more_follows: false,
-                                invoke_id,
-                                sequence_number: None,
-                                proposed_window_size: None,
-                                service_choice,
-                                service_data: response_data,
-                            }))
-                        }
+                        Ok(response_data) => Ok(Some(Apdu::ComplexAck {
+                            segmented: false,
+                            more_follows: false,
+                            invoke_id,
+                            sequence_number: None,
+                            proposed_window_size: None,
+                            service_choice,
+                            service_data: response_data,
+                        })),
                         Err(_) => {
                             Ok(Some(Apdu::Error {
                                 invoke_id,
@@ -1245,45 +1305,27 @@ impl ApplicationLayerHandler {
                     }))
                 }
             }
-            _ => {
-                Ok(Some(Apdu::Reject {
-                    invoke_id,
-                    reject_reason: RejectReason::UnrecognizedService as u8,
-                }))
-            }
+            _ => Ok(Some(Apdu::Reject {
+                invoke_id,
+                reject_reason: RejectReason::UnrecognizedService as u8,
+            })),
         }
     }
 
     /// Process an unconfirmed request
     fn process_unconfirmed_request(
         &mut self,
-        service_choice: u8,
+        service_choice: UnconfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Option<Apdu>> {
         self.stats.unconfirmed_requests += 1;
 
-        // Unconfirmed requests don't get responses unless it's I-Am for Who-Is
-        use crate::service::UnconfirmedServiceChoice;
-        let service = match service_choice {
-            0 => UnconfirmedServiceChoice::IAm,
-            1 => UnconfirmedServiceChoice::IHave,
-            2 => UnconfirmedServiceChoice::UnconfirmedEventNotification,
-            3 => UnconfirmedServiceChoice::UnconfirmedEventNotification,
-            4 => UnconfirmedServiceChoice::UnconfirmedPrivateTransfer,
-            5 => UnconfirmedServiceChoice::UnconfirmedTextMessage,
-            6 => UnconfirmedServiceChoice::TimeSynchronization,
-            7 => UnconfirmedServiceChoice::WhoHas,
-            8 => UnconfirmedServiceChoice::WhoIs,
-            9 => UnconfirmedServiceChoice::UtcTimeSynchronization,
-            _ => return Ok(None),
-        };
-
-        match service {
+        match service_choice {
             UnconfirmedServiceChoice::WhoIs => {
                 if let Some(ref processor) = self.service_processors.who_is {
                     if let Ok(Some(response_data)) = processor(service_data) {
                         return Ok(Some(Apdu::UnconfirmedRequest {
-                            service_choice: UnconfirmedServiceChoice::IAm as u8,
+                            service_choice: UnconfirmedServiceChoice::IAm,
                             service_data: response_data,
                         }));
                     }
@@ -1324,21 +1366,29 @@ impl ApplicationLayerHandler {
         error_code: u8,
     ) -> Result<Option<Apdu>> {
         self.stats.errors += 1;
-        self.transaction_manager.error_transaction(invoke_id, error_class, error_code);
+        self.transaction_manager
+            .error_transaction(invoke_id, error_class, error_code);
         Ok(None)
     }
 
     /// Process a reject PDU
     fn process_reject(&mut self, invoke_id: u8, _reject_reason: u8) -> Result<Option<Apdu>> {
         self.stats.rejects += 1;
-        self.transaction_manager.reject_transaction(invoke_id, _reject_reason);
+        self.transaction_manager
+            .reject_transaction(invoke_id, _reject_reason);
         Ok(None)
     }
 
     /// Process an abort PDU
-    fn process_abort(&mut self, _server: bool, invoke_id: u8, abort_reason: u8) -> Result<Option<Apdu>> {
+    fn process_abort(
+        &mut self,
+        _server: bool,
+        invoke_id: u8,
+        abort_reason: u8,
+    ) -> Result<Option<Apdu>> {
         self.stats.aborts += 1;
-        self.transaction_manager.abort_transaction(invoke_id, abort_reason);
+        self.transaction_manager
+            .abort_transaction(invoke_id, abort_reason);
         Ok(None)
     }
 
@@ -1385,12 +1435,20 @@ impl TransactionManager {
     /// Start a new transaction
     pub fn start_transaction(&mut self, invoke_id: u8, service_choice: u8) -> Result<()> {
         if self.transactions.len() >= self.max_transactions {
-            return Err(ApplicationError::TransactionError("Too many active transactions".to_string()));
+            return Err(ApplicationError::TransactionError(
+                "Too many active transactions".to_string(),
+            ));
         }
 
         // Check for duplicate invoke ID
-        if self.transactions.iter().any(|t| t.invoke_id == invoke_id && t.state == TransactionState::AwaitConfirmation) {
-            return Err(ApplicationError::TransactionError("Duplicate invoke ID".to_string()));
+        if self
+            .transactions
+            .iter()
+            .any(|t| t.invoke_id == invoke_id && t.state == TransactionState::AwaitConfirmation)
+        {
+            return Err(ApplicationError::TransactionError(
+                "Duplicate invoke ID".to_string(),
+            ));
         }
 
         self.transactions.push(Transaction {
@@ -1406,40 +1464,58 @@ impl TransactionManager {
 
     /// Complete a transaction
     pub fn complete_transaction(&mut self, invoke_id: u8) {
-        if let Some(transaction) = self.transactions.iter_mut().find(|t| t.invoke_id == invoke_id) {
+        if let Some(transaction) = self
+            .transactions
+            .iter_mut()
+            .find(|t| t.invoke_id == invoke_id)
+        {
             transaction.state = TransactionState::Complete;
         }
     }
 
     /// Mark transaction as error
     pub fn error_transaction(&mut self, invoke_id: u8, _error_class: u8, _error_code: u8) {
-        if let Some(transaction) = self.transactions.iter_mut().find(|t| t.invoke_id == invoke_id) {
+        if let Some(transaction) = self
+            .transactions
+            .iter_mut()
+            .find(|t| t.invoke_id == invoke_id)
+        {
             transaction.state = TransactionState::Complete;
         }
     }
 
     /// Mark transaction as rejected
     pub fn reject_transaction(&mut self, invoke_id: u8, _reject_reason: u8) {
-        if let Some(transaction) = self.transactions.iter_mut().find(|t| t.invoke_id == invoke_id) {
+        if let Some(transaction) = self
+            .transactions
+            .iter_mut()
+            .find(|t| t.invoke_id == invoke_id)
+        {
             transaction.state = TransactionState::Complete;
         }
     }
 
     /// Mark transaction as aborted
     pub fn abort_transaction(&mut self, invoke_id: u8, _abort_reason: u8) {
-        if let Some(transaction) = self.transactions.iter_mut().find(|t| t.invoke_id == invoke_id) {
+        if let Some(transaction) = self
+            .transactions
+            .iter_mut()
+            .find(|t| t.invoke_id == invoke_id)
+        {
             transaction.state = TransactionState::Complete;
         }
     }
 
     /// Clean up completed transactions
     pub fn cleanup_completed(&mut self) {
-        self.transactions.retain(|t| t.state != TransactionState::Complete);
+        self.transactions
+            .retain(|t| t.state != TransactionState::Complete);
     }
 
     /// Get active transaction count
     pub fn active_count(&self) -> usize {
-        self.transactions.iter()
+        self.transactions
+            .iter()
             .filter(|t| t.state != TransactionState::Complete)
             .count()
     }
@@ -1517,7 +1593,12 @@ impl ApplicationPriorityQueue {
     }
 
     /// Queue a message
-    pub fn enqueue(&mut self, apdu: Apdu, destination: Vec<u8>, priority: MessagePriority) -> Result<()> {
+    pub fn enqueue(
+        &mut self,
+        apdu: Apdu,
+        destination: Vec<u8>,
+        priority: MessagePriority,
+    ) -> Result<()> {
         let queue = match priority {
             MessagePriority::High => &mut self.high,
             MessagePriority::Normal => &mut self.normal,
@@ -1625,7 +1706,7 @@ mod tests {
     #[test]
     fn test_unconfirmed_request_encode_decode() {
         let apdu = Apdu::UnconfirmedRequest {
-            service_choice: 8, // WhoIs
+            service_choice: 8,                          // WhoIs
             service_data: vec![0x08, 0x7B, 0x18, 0x7B], // Range 123-123
         };
 
@@ -1734,12 +1815,12 @@ mod tests {
     #[test]
     fn test_segmentation_info() {
         let seg_info = SegmentationInfo::new(
-            true,   // more_follows
-            true,   // segmented_response_accepted
-            64,     // max_segments_accepted
-            1476,   // max_apdu_length_accepted
-            5,      // sequence_number
-            10,     // proposed_window_size
+            true, // more_follows
+            true, // segmented_response_accepted
+            64,   // max_segments_accepted
+            1476, // max_apdu_length_accepted
+            5,    // sequence_number
+            10,   // proposed_window_size
         );
 
         assert!(seg_info.more_follows);
@@ -1788,7 +1869,7 @@ mod tests {
         let mut incomplete_buffer = SegmentReassemblyBuffer::new(43, 1024);
         incomplete_buffer.add_segment(0, vec![1, 2], false).unwrap();
         incomplete_buffer.add_segment(2, vec![5, 6], true).unwrap(); // Missing segment 1
-        
+
         assert!(!incomplete_buffer.is_complete());
         assert_eq!(incomplete_buffer.missing_segments(), vec![1]);
     }
@@ -1812,19 +1893,27 @@ mod tests {
         let max_apdu = 1024;
 
         // Process first segment
-        let result1 = manager.process_segment(invoke_id, 0, vec![1, 2, 3], true, max_apdu).unwrap();
+        let result1 = manager
+            .process_segment(invoke_id, 0, vec![1, 2, 3], true, max_apdu)
+            .unwrap();
         assert!(result1.is_none()); // Not complete yet
         assert_eq!(manager.active_reassemblies(), 1);
 
         // Process second segment
-        let result2 = manager.process_segment(invoke_id, 1, vec![4, 5, 6], false, max_apdu).unwrap();
+        let result2 = manager
+            .process_segment(invoke_id, 1, vec![4, 5, 6], false, max_apdu)
+            .unwrap();
         assert!(result2.is_some()); // Complete!
         assert_eq!(result2.unwrap(), vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(manager.active_reassemblies(), 0); // Buffer was removed
 
         // Test missing segments query
-        manager.process_segment(200, 0, vec![10, 20], true, max_apdu).unwrap();
-        manager.process_segment(200, 2, vec![50, 60], false, max_apdu).unwrap();
+        manager
+            .process_segment(200, 0, vec![10, 20], true, max_apdu)
+            .unwrap();
+        manager
+            .process_segment(200, 2, vec![50, 60], false, max_apdu)
+            .unwrap();
         let missing = manager.get_missing_segments(200);
         assert_eq!(missing, vec![1]);
     }
@@ -1861,21 +1950,21 @@ mod tests {
     #[test]
     fn test_segmentation_duplicate_handling() {
         let mut buffer = SegmentReassemblyBuffer::new(1, 1024);
-        
+
         // Add segment 0
         buffer.add_segment(0, vec![1, 2, 3], false).unwrap();
         assert_eq!(buffer.segments.len(), 1);
-        
+
         // Add duplicate segment 0 (should be ignored)
         buffer.add_segment(0, vec![4, 5, 6], false).unwrap();
         assert_eq!(buffer.segments.len(), 1);
         assert_eq!(buffer.segments[0].1, vec![1, 2, 3]); // Original data preserved
-        
+
         // Add segment 1 as last
         buffer.add_segment(1, vec![7, 8, 9], true).unwrap();
         assert_eq!(buffer.segments.len(), 2);
         assert!(buffer.is_complete());
-        
+
         let reassembled = buffer.reassemble().unwrap();
         assert_eq!(reassembled, vec![1, 2, 3, 7, 8, 9]);
     }

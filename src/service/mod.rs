@@ -215,6 +215,8 @@ pub enum ServiceError {
     Aborted(AbortReason),
     /// Encoding/decoding error
     EncodingError(String),
+    /// UnconfirmedServiceChoice is not supported,
+    UnsupportedUnconfirmedServiceChoice,
 }
 
 impl fmt::Display for ServiceError {
@@ -226,6 +228,9 @@ impl fmt::Display for ServiceError {
             ServiceError::Rejected(reason) => write!(f, "Service rejected: {:?}", reason),
             ServiceError::Aborted(reason) => write!(f, "Service aborted: {:?}", reason),
             ServiceError::EncodingError(msg) => write!(f, "Encoding error: {}", msg),
+            ServiceError::UnsupportedUnconfirmedServiceChoice => {
+                write!(f, "UnconfirmedServiceChoice not supported")
+            }
         }
     }
 }
@@ -286,6 +291,24 @@ pub enum UnconfirmedServiceChoice {
     WhoHas = 7,
     WhoIs = 8,
     UtcTimeSynchronization = 9,
+}
+
+impl TryFrom<u8> for UnconfirmedServiceChoice {
+    type Error = ServiceError;
+
+    fn try_from(value: u8) -> core::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(UnconfirmedServiceChoice::IAm),
+            1 => Ok(UnconfirmedServiceChoice::IHave),
+            2 => Ok(UnconfirmedServiceChoice::UnconfirmedEventNotification),
+            3 => Ok(UnconfirmedServiceChoice::UnconfirmedPrivateTransfer),
+            4 => Ok(UnconfirmedServiceChoice::UnconfirmedTextMessage),
+            5 => Ok(UnconfirmedServiceChoice::TimeSynchronization),
+            6 => Ok(UnconfirmedServiceChoice::WhoHas),
+            7 => Ok(UnconfirmedServiceChoice::UtcTimeSynchronization),
+            _ => Err(ServiceError::UnsupportedUnconfirmedServiceChoice),
+        }
+    }
 }
 
 /// Reject reason codes
