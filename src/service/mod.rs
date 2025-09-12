@@ -1619,30 +1619,8 @@ pub struct BacnetDateTime {
 
 impl BacnetDateTime {
     /// Create a new BACnet DateTime
-    pub fn new(
-        year: u16,
-        month: u8,
-        day: u8,
-        weekday: u8,
-        hour: u8,
-        minute: u8,
-        second: u8,
-        hundredths: u8,
-    ) -> Self {
-        Self {
-            date: crate::object::Date {
-                year,
-                month,
-                day,
-                weekday,
-            },
-            time: crate::object::Time {
-                hour,
-                minute,
-                second,
-                hundredths,
-            },
-        }
+    pub fn new(date: crate::object::Date, time: crate::object::Time) -> Self {
+        Self { date, time }
     }
 
     /// Create from current system time (requires std feature)
@@ -1651,16 +1629,20 @@ impl BacnetDateTime {
         use chrono::{Datelike, Local, Timelike};
 
         let now = Local::now();
-        let year = now.year() as u16;
-        let month = now.month() as u8;
-        let day = now.day() as u8;
-        let weekday = now.weekday().number_from_monday() as u8; // BACnet uses 1=Monday
-        let hour = now.hour() as u8;
-        let minute = now.minute() as u8;
-        let second = now.second() as u8;
-        let hundredths = (now.nanosecond() / 10_000_000) as u8;
+        let date = crate::object::Date {
+            year: now.year() as u16,
+            month: now.month() as u8,
+            day: now.day() as u8,
+            weekday: now.weekday().number_from_monday() as u8, // BACnet uses 1=Monday
+        };
+        let time = crate::object::Time {
+            hour: now.hour() as u8,
+            minute: now.minute() as u8,
+            second: now.second() as u8,
+            hundredths: (now.nanosecond() / 10_000_000) as u8,
+        };
 
-        Self::new(year, month, day, weekday, hour, minute, second, hundredths)
+        Self::new(date, time)
     }
 
     /// Create unspecified time (all 255 values)
@@ -1793,8 +1775,20 @@ impl UtcTimeSynchronizationRequest {
         let second = now.second() as u8;
         let hundredths = (now.nanosecond() / 10_000_000) as u8;
 
-        let utc_date_time =
-            BacnetDateTime::new(year, month, day, weekday, hour, minute, second, hundredths);
+        let utc_date_time = BacnetDateTime::new(
+            crate::object::Date {
+                year,
+                month,
+                day,
+                weekday,
+            },
+            crate::object::Time {
+                hour,
+                minute,
+                second,
+                hundredths,
+            },
+        );
         Self::new(utc_date_time)
     }
 
@@ -2141,7 +2135,20 @@ mod tests {
     #[test]
     fn test_bacnet_datetime() {
         // Test creating specific datetime
-        let datetime = BacnetDateTime::new(2024, 3, 15, 5, 14, 30, 45, 50);
+        let datetime = BacnetDateTime::new(
+            crate::object::Date {
+                year: 2024,
+                month: 3,
+                day: 15,
+                weekday: 5,
+            },
+            crate::object::Time {
+                hour: 14,
+                minute: 30,
+                second: 45,
+                hundredths: 50,
+            },
+        );
         assert_eq!(datetime.date.year, 2024);
         assert_eq!(datetime.date.month, 3);
         assert_eq!(datetime.date.day, 15);
@@ -2169,7 +2176,20 @@ mod tests {
 
     #[test]
     fn test_time_synchronization_request() {
-        let datetime = BacnetDateTime::new(2024, 6, 20, 4, 10, 15, 30, 25);
+        let datetime = BacnetDateTime::new(
+            crate::object::Date {
+                year: 2024,
+                month: 6,
+                day: 20,
+                weekday: 4,
+            },
+            crate::object::Time {
+                hour: 10,
+                minute: 15,
+                second: 30,
+                hundredths: 25,
+            },
+        );
         let time_sync = TimeSynchronizationRequest::new(datetime);
 
         assert_eq!(time_sync.date_time, datetime);
@@ -2185,7 +2205,20 @@ mod tests {
 
     #[test]
     fn test_utc_time_synchronization_request() {
-        let utc_datetime = BacnetDateTime::new(2024, 6, 20, 4, 18, 45, 15, 75);
+        let utc_datetime = BacnetDateTime::new(
+            crate::object::Date {
+                year: 2024,
+                month: 6,
+                day: 20,
+                weekday: 4,
+            },
+            crate::object::Time {
+                hour: 18,
+                minute: 45,
+                second: 15,
+                hundredths: 75,
+            },
+        );
         let utc_sync = UtcTimeSynchronizationRequest::new(utc_datetime);
 
         assert_eq!(utc_sync.utc_date_time, utc_datetime);
