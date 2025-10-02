@@ -40,6 +40,13 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 # Optional async runtime
 async-trait = { version = "0.1", optional = true }
 
+# BACnet/SC (Secure Connect) dependencies
+tokio-tungstenite = { version = "0.24", optional = true, features = ["native-tls"] }
+tungstenite = { version = "0.24", optional = true }
+native-tls = { version = "0.2", optional = true }
+url = { version = "2.5", optional = true }
+futures-util = { version = "0.3", optional = true }
+
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1.5"
@@ -59,6 +66,7 @@ std = [
     "hex/std",
 ]
 async = ["tokio", "async-trait", "std"]
+bacnet-sc = ["async", "tokio-tungstenite", "tungstenite", "native-tls", "url", "futures-util"]
 no-std = []
 
 # Basic examples
@@ -102,6 +110,11 @@ required-features = ["std"]
 name = "timeout_demo"
 path = "examples/networking/timeout_demo.rs"
 required-features = ["std"]
+
+[[example]]
+name = "bacnet_sc_node"
+path = "examples/networking/bacnet_sc_node.rs"
+required-features = ["bacnet-sc"]
 
 # Object examples
 [[example]]

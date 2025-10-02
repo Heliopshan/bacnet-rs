@@ -500,6 +500,14 @@ pub mod mstp;
 /// pattern detection for troubleshooting.
 pub mod validation;
 
+/// BACnet/SC (Secure Connect) implementation.
+///
+/// This module provides BACnet Secure Connect communication using WebSocket
+/// over TLS (ASHRAE 135-2020 Addendum bj). It enables secure, certificate-based
+/// communication through hub-and-spoke topology with Virtual MAC addressing.
+#[cfg(feature = "bacnet-sc")]
+pub mod bsc;
+
 #[cfg(feature = "std")]
 pub use bip::BacnetIpDataLink;
 
@@ -508,3 +516,6 @@ pub use ethernet::EthernetDataLink;
 
 #[cfg(feature = "std")]
 pub use mstp::MstpDataLink;
+
+#[cfg(feature = "bacnet-sc")]
+pub use bsc::{BscClient, BscClientConfig, BscNode, NodeState};
